@@ -1,0 +1,20 @@
+# Atmos Binaural Converter - Python Dependencies
+
+# Core (required)
+numpy>=1.20.0
+scipy>=1.7.0
+
+# HRTF/SOFA support
+h5py>=3.0.0
+
+# Image processing (optional)
+pillow>=9.0.0
+
+# GUI (included with Python)
+# tkinter - bundled with Python
+
+# Audio processing (optional)
+# soundfile>=0.10.0
+
+# Building (optional)
+# pyinstaller>=5.0.0

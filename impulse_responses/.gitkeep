@@ -1,0 +1,4 @@
+# Place Atmos impulse response WAV files here
+# Name files by channel: FL.wav, FR.wav, FC.wav, LFE.wav, BL.wav, BR.wav
+# Or organize in profile subdirectories for HeSuVi support
+# Supported sample rates: 44100Hz, 48000Hz, 96000Hz
