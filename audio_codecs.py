@@ -4,10 +4,12 @@ Audio Codec and Container Configuration Module
 Defines supported codecs, containers, and their FFmpeg encoding parameters.
 
 Supports:
-- Codecs: AAC, MP3, FLAC, Opus, Vorbis, AC3, E-AC-3
-- Containers: M4A, MP4, MKV, OGG, WebM, FLAC, WAV, AVI
+- Codecs: AAC, MP3, FLAC, Opus, Vorbis, AC3, E-AC-3, AC-4, TrueHD, DTS, ALAC
+- Containers: M4A, MP4, MKV, MKA, OGG, WebM, FLAC, WAV, AVI, AC-4, DTS
 """
 
+import re
+import subprocess
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -103,6 +105,36 @@ CODECS: Dict[str, AudioCodec] = {
         supports_bitrate=False,
         description="Uncompressed 24-bit audio"
     ),
+    "ac4": AudioCodec(
+        name="AC-4",
+        extension=".ac4",
+        ffmpeg_name="ac4",
+        default_bitrate="192k",
+        min_bitrate="24k",
+        max_bitrate="448k",
+        description="Dolby AC-4 - Next-gen Atmos/broadcast (decode + remux; encode if your FFmpeg build has it)"
+    ),
+    "truehd": AudioCodec(
+        name="TrueHD",
+        extension=".thd",
+        ffmpeg_name="truehd",
+        supports_bitrate=False,
+        description="Dolby TrueHD - Lossless Atmos surround"
+    ),
+    "dts": AudioCodec(
+        name="DTS",
+        extension=".dts",
+        ffmpeg_name="dca",
+        default_bitrate="768k",
+        description="DTS Coherent Acoustics - Surround sound"
+    ),
+    "alac": AudioCodec(
+        name="ALAC",
+        extension=".m4a",
+        ffmpeg_name="alac",
+        supports_bitrate=False,
+        description="Apple Lossless Audio Codec"
+    ),
 }
 
 
@@ -120,15 +152,36 @@ CONTAINERS: Dict[str, Container] = {
         name="MP4",
         extension=".mp4",
         ffmpeg_format="mp4",
-        supported_codecs=["aac", "mp3", "ac3", "eac3"],
+        supported_codecs=["aac", "mp3", "ac3", "eac3", "ac4"],
         description="MPEG-4 - Universal video/audio"
     ),
     "mkv": Container(
         name="MKV",
         extension=".mkv",
         ffmpeg_format="matroska",
-        supported_codecs=["aac", "mp3", "flac", "opus", "vorbis", "ac3", "eac3"],
+        supported_codecs=["aac", "mp3", "flac", "opus", "vorbis", "ac3", "eac3", "truehd", "dts", "alac", "ac4"],
         description="Matroska - Maximum codec support"
+    ),
+    "mka": Container(
+        name="MKA",
+        extension=".mka",
+        ffmpeg_format="matroska",
+        supported_codecs=["aac", "mp3", "flac", "opus", "vorbis", "ac3", "eac3", "truehd", "dts", "alac", "ac4"],
+        description="Matroska Audio - Max codec support, audio only"
+    ),
+    "ac4": Container(
+        name="AC-4",
+        extension=".ac4",
+        ffmpeg_format="ac4",
+        supported_codecs=["ac4"],
+        description="Dolby AC-4 raw stream - Atmos / broadcast"
+    ),
+    "dts": Container(
+        name="DTS",
+        extension=".dts",
+        ffmpeg_format="dts",
+        supported_codecs=["dts"],
+        description="Raw DTS stream"
     ),
     "ogg": Container(
         name="OGG",
@@ -166,6 +219,69 @@ CONTAINERS: Dict[str, Container] = {
         description="AVI - Legacy compatibility"
     ),
 }
+
+
+# Cache of "does this FFmpeg build ship an encoder for codec X?"
+_ENCODER_CACHE: Dict[str, Optional[bool]] = {}
+
+
+def is_codec_encoder_available(codec_name: str) -> Optional[bool]:
+    """
+    Return True/False if the installed FFmpeg has an encoder for the codec.
+
+    Returns None if FFmpeg could not be probed. Results are cached.
+    """
+    codec = get_codec(codec_name)
+    if not codec:
+        return None
+    name = codec.ffmpeg_name
+    if name in _ENCODER_CACHE:
+        return _ENCODER_CACHE[name]
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True, text=True, timeout=20)
+        # ffmpeg -encoders lines look like:  " A....D alac   ALAC (...)"
+        # i.e. type char + 5 capability flags, then the encoder name.
+        pattern = re.compile(r"(?m)^\s*[AV].....\s+" + re.escape(name) + r"\s")
+        available = bool(pattern.search(result.stdout))
+    except Exception:
+        available = None
+    _ENCODER_CACHE[name] = available
+    return available
+
+
+# Cache of "does this FFmpeg build ship a decoder for codec X?"
+_DECODER_CACHE: Dict[str, Optional[bool]] = {}
+
+
+def is_codec_decoder_available(codec_name: str) -> Optional[bool]:
+    """
+    Return True/False if the installed FFmpeg has a decoder for the codec.
+
+    Important: some codecs (e.g. AC-4) are recognized for demuxing/muxing but
+    have NO decoder in FFmpeg builds, so they can only be remuxed/passed
+    through, not played or re-encoded. Returns None if FFmpeg could not be
+    probed. Results are cached.
+    """
+    codec = get_codec(codec_name)
+    if not codec:
+        return None
+    name = codec.ffmpeg_name
+    if name in _DECODER_CACHE:
+        return _DECODER_CACHE[name]
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-decoders"],
+            capture_output=True, text=True, timeout=20)
+        # ffmpeg -decoders lines look like:  " A....D ac3   ATSC A/52A (...)"
+        # i.e. type char + 5 capability flags, then the decoder name.
+        pattern = re.compile(r"(?m)^\s*[AV].....\s+" + re.escape(name) + r"\s")
+        available = bool(pattern.search(result.stdout))
+    except Exception:
+        available = None
+    _DECODER_CACHE[name] = available
+    return available
 
 
 def get_codec(codec_name: str) -> Optional[AudioCodec]:
@@ -229,6 +345,8 @@ def get_ffmpeg_encode_args(
         args.extend(["-vbr", "on"])
     elif codec_name == "vorbis":
         args.extend(["-q:a", "6"])  # VBR quality 6
+    elif codec_name == "truehd":
+        args.extend(["-strict", "experimental"])  # TrueHD encoder is experimental
     
     return args
 
@@ -266,6 +384,10 @@ PRESETS = {
     "Maximum Quality": {"codec": "flac", "container": "mkv", "bitrate": None},
     "Podcast": {"codec": "mp3", "container": "mp3", "bitrate": "192k"},
     "Legacy Compatible": {"codec": "mp3", "container": "avi", "bitrate": "320k"},
+    "AC-4 Atmos": {"codec": "ac4", "container": "mp4", "bitrate": "192k"},
+    "TrueHD Lossless": {"codec": "truehd", "container": "mkv", "bitrate": None},
+    "DTS Surround": {"codec": "dts", "container": "dts", "bitrate": "768k"},
+    "ALAC Lossless": {"codec": "alac", "container": "m4a", "bitrate": None},
 }
 
 

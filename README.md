@@ -13,8 +13,11 @@ Convert Dolby 5.1/7.1 surround sound to binaural stereo for TWS earbuds and head
 - **Virtual Speaker Shifter** - Drag speakers to adjust positions with distance-based volume
 - **Volume Visualizer** - Real-time VU meters and waveform display
 - **Channel Visualizer** - Play any file and watch 5.1/7.1/Atmos per-channel levels (GUI tab + TUI CLI), or capture live system audio
-- **Multi-Codec Support** - AAC, MP3, FLAC, Opus, Vorbis, WAV
-- **Multi-Container Support** - M4A, MP4, MKV, OGG, WebM, FLAC
+- **Multi-Codec Support** - AAC, MP3, FLAC, Opus, Vorbis, WAV, AC3, E-AC-3, AC-4, TrueHD, DTS, ALAC
+- **Multi-Container Support** - M4A, MP4, MKV, MKA, OGG, WebM, FLAC, WAV, AC-4, DTS
+- **AC-4 Support** - Remux/stream-copy Dolby AC-4 (Atmos) files (stock FFmpeg builds ship no AC-4 decoder, so AC-4 is passthrough-only here)
+- **Surround Suite Methods** - Stereo→5.1/7.1 upmix, 7.1→5.1 downmix, stream-copy passthrough
+- **🎵 Media Player** - Play audio aloud (ffplay or sounddevice) with live multichannel VU meters, waveform, playlist & real-time conversion preview
 - **Batch Processing** - Convert multiple files at once
 - **Cross-Platform** - Windows (EXE), Linux (AppImage), macOS
 
@@ -45,6 +48,31 @@ chmod +x build_appimage.sh
 ### GUI Application
 ```bash
 python gui_app.py
+```
+
+The GUI now includes a **🎵 Player** tab: load a playlist, play with sound output
+(ffplay by default, or `pip install sounddevice` for precise block-level
+playback), and watch per-channel VU meters + waveforms. Enable
+**"Preview conversion"** to audition the currently selected conversion method
+in real time before exporting.
+
+### Surround Suite (CLI)
+```bash
+# Stereo -> 5.1 upmix
+python convert_atmos.py stereo.m4a --method upmix51 --codec aac --container m4a
+
+# Stereo -> 7.1 upmix
+python convert_atmos.py stereo.m4a --method upmix71 --codec eac3 --container mkv
+
+# 7.1 -> 5.1 downmix
+python convert_atmos.py movie71.mkv --method downmix51 --codec eac3 --container mkv
+
+# AC-4 / TrueHD / DTS passthrough (stream copy, no re-encode)
+python convert_atmos.py atmos.ac4 --method passthrough --container ac4
+python convert_atmos.py truehd.mkv --method passthrough --container mkv
+
+# Lossless TrueHD encode
+python convert_atmos.py input.m4a --codec truehd --container mkv
 ```
 
 ## 📊 Channel Visualizer
@@ -136,7 +164,7 @@ audio-atmos-converter/
 ├── head_model_parser.py    # 3D STL/OBJ parsing
 ├── hesuvi_support.py       # HeSuVi format support
 ├── volume_visualizer.py    # VU meters and waveform
-├── codecs.py               # Codec/container config
+├── audio_codecs.py         # Codec/container config (NOT the Python stdlib codecs)
 ├── build_exe.bat           # Windows EXE builder
 ├── build_appimage.sh       # Linux AppImage builder
 ├── requirements.txt        # Python dependencies
@@ -187,6 +215,10 @@ You can also import IR pairs exported from **HeSuVi/Equalizer APO** (the
 | Opus | OGG/WebM | Lossy |
 | Vorbis | OGG | Lossy |
 | PCM | WAV | Lossless |
+| AC-4 | AC4/MP4/MKV | Lossy (Atmos) |
+| TrueHD | MKV | Lossless |
+| DTS | DTS/MKV | Lossy |
+| ALAC | M4A/MKV | Lossless |
 
 ## 🔧 Technical Details
 
@@ -196,6 +228,9 @@ You can also import IR pairs exported from **HeSuVi/Equalizer APO** (the
 - **Spatial** - HRTF-like binaural effect
 - **HRTF** - Personalized with SOFA file
 - **Custom** - User-defined speaker positions
+- **Upmix 5.1 / 7.1** - Surround upmix from stereo with FFmpeg's `surround` filter
+- **Downmix 7.1→5.1** - Fold side channels into rears
+- **Passthrough** - Stream copy / remux (AC-4, TrueHD, DTS, ...)
 
 ### Distance-Based Volume
 Speakers automatically attenuate volume when moved away from center using inverse distance law.

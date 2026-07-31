@@ -24,14 +24,18 @@ from pathlib import Path
 from typing import Optional, Tuple, Dict, List
 
 # Import codec support
+# NB: this is our own audio_codecs module - NOT the Python stdlib 'codecs',
+# which the interpreter imports at startup (so a file named codecs.py would
+# silently shadow/never-load).
 try:
-    from codecs import (
+    from audio_codecs import (
         CODECS, CONTAINERS, PRESETS,
         get_codec, get_container, get_compatible_containers,
-        get_ffmpeg_encode_args, get_output_args, get_preset
+        get_ffmpeg_encode_args, get_output_args, get_preset,
+        is_codec_encoder_available, is_codec_decoder_available
     )
 except ImportError:
-    # Fallback if codecs module not available
+    # Fallback if audio_codecs module not available
     CODECS = {}
     CONTAINERS = {}
     PRESETS = {}
@@ -41,6 +45,8 @@ except ImportError:
     get_ffmpeg_encode_args = lambda c, b=None, s=48000: ["-c:a", "aac", "-b:a", b or "256k", "-ar", str(s)]
     get_output_args = lambda c: ["-f", "ipod", "-movflags", "+faststart"]
     get_preset = lambda x: None
+    is_codec_encoder_available = lambda c: True
+    is_codec_decoder_available = lambda c: True
 
 # Import HRTF support
 try:
@@ -101,8 +107,29 @@ FILTER_PRESETS = {
             "equalizer=f=10000:t=q:w=1:g=1.5,"
             "volume=0.95"
         )
+    },
+    "upmix51": {
+        "name": "Surround Upmix to 5.1",
+        "filter": "aresample=48000,surround=chl_out=5.1"
+    },
+    "upmix71": {
+        "name": "Surround Upmix to 7.1",
+        "filter": "aresample=48000,surround=chl_out=7.1"
+    },
+    "downmix51": {
+        "name": "Downmix 7.1 to 5.1",
+        "filter": (
+            "aresample=48000,"
+            "pan=5.1|c0=c0|c1=c1|c2=c2|c3=c3|"
+            "c4=c4+0.707*c6|c5=c5+0.707*c7"
+        )
     }
 }
+
+# Methods that always apply the filter (even to already-stereo input)
+UPMIX_METHODS = ("upmix51", "upmix71")
+# Methods that copy the audio stream without re-encoding
+PASSTHROUGH_METHOD = "passthrough"
 
 
 def check_ffmpeg() -> bool:
@@ -158,19 +185,20 @@ def convert_to_binaural(
     quality: str = "high",
     method: str = "enhanced",
     codec: str = "aac",
-    container: str = "m4a",
+    container: Optional[str] = "m4a",
     sofa_file: Optional[str] = None,
     ir_base: Optional[str] = None,
     ir_dir: Optional[str] = None
 ) -> bool:
     """
-    Convert multi-channel audio to binaural stereo.
+    Convert multi-channel audio to binaural stereo (or remux/surround-mix).
     
     Args:
         input_file: Path to input audio file
         output_file: Path to output file
         quality: Output quality (low/medium/high/ultra)
-        method: Conversion method (standard/enhanced/spatial/hrtf)
+        method: Conversion method
+                (standard/enhanced/spatial/hrtf/upmix51/upmix71/downmix51/passthrough)
         codec: Output codec name
         container: Output container name
         sofa_file: Path to SOFA file for HRTF processing
@@ -181,7 +209,44 @@ def convert_to_binaural(
         True if successful, False otherwise
     """
     bitrate = QUALITY_PRESETS.get(quality, "256k")
-    
+
+    # Stream-copy / remux mode (e.g. AC-4 passthrough, TrueHD remux, ...)
+    if method == PASSTHROUGH_METHOD:
+        # Auto-pick a container that can hold the input codec when none given
+        resolved_container = container or _passthrough_container_for(input_file)
+        print(f"\n  Method:   Passthrough (stream copy)")
+        print(f"  Container:{get_container(resolved_container).name if get_container(resolved_container) else resolved_container.upper()}")
+        print("  (Note: container must support the input codec)")
+        print("\n  Copying...")
+        output_args = get_output_args(resolved_container)
+        cmd = (["ffmpeg", "-i", input_file, "-c:a", "copy", "-map_metadata", "0"]
+               + output_args + ["-y", output_file])
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                print(f"  ✓ Remuxed to {output_file}")
+                return True
+            for line in (result.stderr or "").split("\n"):
+                if "error" in line.lower():
+                    print(f"    {line.strip()}")
+            return False
+        except Exception as e:
+            print(f"  ✗ Error: {e}")
+            return False
+
+    # The input stream must be decodable for any method that re-encodes.
+    # Some codecs (e.g. AC-4) have no decoder in FFmpeg builds, so they
+    # can only be remuxed via 'passthrough' - not played or converted.
+    input_codec = _input_codec(input_file)
+    if input_codec:
+        dec = is_codec_decoder_available(input_codec)
+        if dec is False:
+            print(f"\n  ✗ FFmpeg has no decoder for '{input_codec}' audio.")
+            print("    • AC-4 (and similar) streams can only be REMUXED with")
+            print("      --method passthrough; they can't be played or re-encoded")
+            print("      by this FFmpeg build.")
+            return False
+
     # Stereo convolver IR mode (44/48 kHz L/R impulse responses)
     if ir_base:
         if not apply_stereo_convolution or not resolve_stereo_ir_pair:
@@ -194,7 +259,7 @@ def convert_to_binaural(
             print(f"    Expected files like {ir_base}_44_left.wav / {ir_base}_48_right.wav")
             return False
         codec_args = get_ffmpeg_encode_args(codec, bitrate, 48000)
-        output_args = get_output_args(container)
+        output_args = get_output_args(container or "m4a")
         print(f"\n  Method:   Stereo Convolver (IR pair: {ir_base})")
         print(f"  IR Dir:   {ir_dir}")
         print(f"  Rates:    {', '.join(str(r) for r in sorted(pairs))}")
@@ -220,9 +285,19 @@ def convert_to_binaural(
     else:
         filter_str = FILTER_PRESETS["enhanced"]["filter"]
         method_name = "Enhanced"
-    
+
+    # AC-4 output requires an encoder - warn early if the build lacks it
+    if codec == "ac4":
+        available = is_codec_encoder_available("ac4")
+        if available is False:
+            print("\n  ✗ This FFmpeg build has no AC-4 encoder.")
+            print("    • Use method 'passthrough' to remux AC-4 without re-encoding.")
+            print("    • Or pick another codec (e.g. eac3 / aac / truehd / dts).")
+            return False
+
     # Get codec and container info
     codec_obj = get_codec(codec)
+    container = container or "m4a"
     container_obj = get_container(container)
     
     codec_name = codec_obj.name if codec_obj else codec.upper()
@@ -246,8 +321,14 @@ def convert_to_binaural(
         print(f"  Input Info: {audio_info}")
     print(f"  Channels: {channels}")
     
-    # Skip downmix if already stereo or mono
-    if channels <= 2:
+    # downmix51 needs 7.1 (8ch) input since the pan filter references c6/c7
+    if method == "downmix51" and channels < 8:
+        print(f"\n  ✗ 'downmix51' requires a 7.1 (8-channel) input; found {channels} channels.")
+        return False
+
+    # Skip processing if already stereo/mono - EXCEPT for surround-upmix
+    # methods which must always apply the filter.
+    if channels <= 2 and method not in UPMIX_METHODS:
         print(f"\n  ✓ Already stereo/mono - re-encoding...")
         encode_args = get_ffmpeg_encode_args(codec, bitrate, 48000)
         output_args = get_output_args(container)
@@ -266,11 +347,11 @@ def convert_to_binaural(
             print(f"  ✗ Error: {e}")
             return False
     
-    # Build FFmpeg command (only apply downmix if >2 channels)
+    # Build FFmpeg command (apply filter for surround input OR upmix methods)
     encode_args = get_ffmpeg_encode_args(codec, bitrate, 48000)
     output_args = get_output_args(container)
     
-    if channels > 2:
+    if channels > 2 or method in UPMIX_METHODS:
         cmd = ["ffmpeg", "-i", input_file, "-af", filter_str] + encode_args + output_args + ["-y", output_file]
     else:
         cmd = ["ffmpeg", "-i", input_file] + encode_args + output_args + ["-y", output_file]
@@ -316,28 +397,76 @@ def convert_to_binaural(
         return False
 
 
+AUDIO_EXTS = (".m4a", ".mp4", ".mkv", ".mka", ".mp3", ".flac", ".wav", ".aac",
+              ".ogg", ".opus", ".ac3", ".eac3", ".ac4", ".thd", ".dts")
+
+# Input audio codec -> sensible container for a stream-copy (passthrough) remux
+_PASSTHROUGH_CONTAINERS = {
+    "ac4": "ac4", "truehd": "mkv", "dca": "dts", "dts": "dts",
+    "eac3": "mkv", "ac3": "mkv", "aac": "m4a", "mp3": "mp3",
+    "opus": "ogg", "vorbis": "ogg", "flac": "flac", "alac": "m4a",
+    "pcm_s16le": "wav", "pcm_s24le": "wav", "pcm_f32le": "wav",
+}
+
+
+def _input_codec(file_path: str) -> Optional[str]:
+    """Return the input audio codec name (ffprobe), or None on failure."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=codec_name",
+             "-of", "csv=p=0", file_path],
+            capture_output=True, text=True)
+        codec = result.stdout.strip().lower()
+        return codec or None
+    except Exception:
+        return None
+
+
+def _passthrough_container_for(file_path: str) -> str:
+    """Pick a container that can hold the input stream without re-encoding."""
+    codec = _input_codec(file_path)
+    if codec in _PASSTHROUGH_CONTAINERS:
+        return _PASSTHROUGH_CONTAINERS[codec]
+    return "mkv"  # Matroska holds nearly every audio codec
+
+
+def _output_extension(codec: str = "aac", container: Optional[str] = None) -> str:
+    """Pick a sensible output extension from the codec/container pair."""
+    codec_obj = get_codec(codec)
+    container_obj = get_container(container) if container else None
+    if container_obj:
+        return container_obj.extension
+    if codec_obj:
+        return codec_obj.extension
+    return ".m4a"
+
+
 def process_batch(
     input_dir: str,
     quality: str = "high",
     method: str = "enhanced",
     ir_base: Optional[str] = None,
-    ir_dir: Optional[str] = None
+    ir_dir: Optional[str] = None,
+    codec: str = "aac",
+    container: Optional[str] = None
 ) -> Tuple[int, int]:
     """
-    Process all M4A files in a directory.
+    Process all audio files in a directory.
     
     Returns:
         Tuple of (success_count, failure_count)
     """
-    # Find all M4A files
-    pattern = os.path.join(input_dir, "*.m4a")
-    files = glob.glob(pattern)
+    exts = tuple(e.lower() for e in AUDIO_EXTS)
+    files = [f for f in glob.glob(os.path.join(input_dir, "*"))
+             if os.path.splitext(f)[1].lower() in exts]
+    files.sort()
     
     if not files:
-        print(f"\n  No M4A files found in {input_dir}")
+        print(f"\n  No audio files found in {input_dir}")
         return 0, 0
     
-    print(f"\n  Found {len(files)} M4A files to process")
+    print(f"\n  Found {len(files)} audio files to process")
     
     success = 0
     failed = 0
@@ -345,9 +474,15 @@ def process_batch(
     for file_path in files:
         # Generate output filename
         base_name = os.path.splitext(file_path)[0]
-        output_file = f"{base_name}_binaural.m4a"
+        # Passthrough can auto-pick a container per file (input codec varies)
+        if method == PASSTHROUGH_METHOD and not container:
+            file_ext = _output_extension(codec, _passthrough_container_for(file_path))
+        else:
+            file_ext = _output_extension(codec, container)
+        output_file = f"{base_name}_binaural{file_ext}"
         
         if convert_to_binaural(file_path, output_file, quality, method,
+                               codec=codec, container=container,
                                ir_base=ir_base, ir_dir=ir_dir):
             success += 1
         else:
@@ -397,9 +532,26 @@ Examples:
     )
     parser.add_argument(
         "-m", "--method",
-        choices=["standard", "enhanced", "spatial"],
+        choices=["standard", "enhanced", "spatial", "upmix51", "upmix71",
+                 "downmix51", "passthrough"],
         default="enhanced",
-        help="Conversion method (default: enhanced)"
+        help=("Conversion method (default: enhanced). Surround suite methods: "
+              "upmix51/upmix71 (stereo→surround), downmix51 (7.1→5.1), "
+              "passthrough (stream copy / remux, e.g. AC-4)")
+    )
+    parser.add_argument(
+        "--codec",
+        default="aac",
+        help="Output codec (default: aac): aac, mp3, flac, opus, vorbis, ac3, "
+             "eac3, ac4, truehd, dts, alac, pcm_s16le, pcm_s24le"
+    )
+    parser.add_argument(
+        "--container",
+        default=None,
+        help="Output container (default: auto - m4a for most codecs, or the "
+             "input's container for passthrough): m4a, mp4, mkv, mka, ogg, "
+             "webm, flac, wav, ac4, dts, avi. Note: surround/lossless codecs "
+             "need a matching container (truehd->mkv, dts->dts/mkv, ac4->ac4/mp4/mkv)."
     )
     parser.add_argument(
         "--batch",
@@ -445,6 +597,10 @@ Examples:
         if not export_stereo_irs:
             print("\n[ERROR] foobar_convolver/scipy module not available")
             sys.exit(1)
+        if args.method not in ("standard", "enhanced", "spatial"):
+            print("\n[ERROR] IR export only supports stereo-processing methods"
+                  " (standard / enhanced / spatial)")
+            sys.exit(1)
         chain = FILTER_PRESETS.get(args.method, FILTER_PRESETS["enhanced"])["filter"]
         ir_dir = args.ir_dir or (str(STEREO_IR_DIR) if STEREO_IR_DIR else "impulse_responses/stereo")
         print(f"\n  Exporting IR files for method '{args.method}'...")
@@ -469,7 +625,8 @@ Examples:
             sys.exit(1)
         
         success, failed = process_batch(args.input, args.quality, args.method,
-                                        args.convolve, args.ir_dir)
+                                        args.convolve, args.ir_dir,
+                                        args.codec, args.container)
         
         print(f"\n{'='*60}")
         print(f"  Batch Complete!")
@@ -491,7 +648,11 @@ Examples:
     # Generate output filename if not provided
     if not args.output:
         base_name = os.path.splitext(args.input)[0]
-        args.output = f"{base_name}_binaural.m4a"
+        if args.method == PASSTHROUGH_METHOD and not args.container:
+            ext = _output_extension(args.codec, _passthrough_container_for(args.input))
+        else:
+            ext = _output_extension(args.codec, args.container)
+        args.output = f"{base_name}_binaural{ext}"
     
     # Convert
     start_time = time.time()
@@ -500,6 +661,8 @@ Examples:
         args.output,
         args.quality,
         args.method,
+        codec=args.codec,
+        container=args.container,
         ir_base=args.convolve,
         ir_dir=args.ir_dir
     )

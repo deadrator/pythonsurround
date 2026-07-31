@@ -18,17 +18,27 @@ from typing import Dict, List, Optional, Callable
 import threading
 import time
 
+try:
+    from dark_theme import PALETTE
+except ImportError:  # pragma: no cover - standalone use
+    PALETTE = {}
 
-# Channel colors
+
+def _c(name: str, default: str) -> str:
+    """Palette lookup with fallback (standalone-safe)."""
+    return PALETTE.get(name, default)
+
+
+# Channel colors (midnight/blue theme)
 CHANNEL_COLORS = {
-    "FL": "#4a9eff",   # Blue - Front Left
-    "FR": "#4a9eff",   # Blue - Front Right
-    "FC": "#ffffff",   # White - Front Center
-    "LFE": "#ff6b6b",  # Red - Subwoofer
-    "BL": "#6bff6b",   # Green - Back Left
-    "BR": "#6bff6b",   # Green - Back Right
-    "SL": "#ffb86b",   # Orange - Side Left
-    "SR": "#ffb86b",   # Orange - Side Right
+    "FL": _c("front", "#4a9eff"),    # Blue - Front Left
+    "FR": _c("front", "#4a9eff"),    # Blue - Front Right
+    "FC": _c("text", "#e8edf6"),     # White - Front Center
+    "LFE": _c("lfe", "#ff6b6b"),     # Purple/Red - Subwoofer
+    "BL": _c("rear", "#6bff6b"),     # Green - Back Left
+    "BR": _c("rear", "#6bff6b"),     # Green - Back Right
+    "SL": _c("side", "#ffb86b"),     # Green - Side Left
+    "SR": _c("side", "#ffb86b"),     # Green - Side Right
 }
 
 # Default volumes (0.0 to 1.0)
@@ -56,7 +66,7 @@ class VUMeter(tk.Canvas):
         self.width = 30
         self.height = 150
         
-        self.configure(width=self.width, height=self.height, bg="#1a1a2e", highlightthickness=0)
+        self.configure(width=self.width, height=self.height, bg=_c("canvas_bg", "#0a0e17"), highlightthickness=0)
         
     def set_level(self, level: float):
         """Set current level (0.0 to 1.0)."""
@@ -75,7 +85,7 @@ class VUMeter(tk.Canvas):
         bar_x = 4
         
         # Draw background
-        self.create_rectangle(0, 0, w, h, fill="#0a0a1a", outline="")
+        self.create_rectangle(0, 0, w, h, fill=_c("canvas_bg", "#0a0e17"), outline="")
         
         # Draw meter segments
         num_segments = 20
@@ -89,13 +99,13 @@ class VUMeter(tk.Canvas):
             if i < filled_segments:
                 # Color based on level
                 if i >= num_segments * 0.8:
-                    color = "#ff4444"  # Red zone
+                    color = _c("err", "#ff4444")  # Red zone
                 elif i >= num_segments * 0.6:
-                    color = "#ffaa00"  # Yellow zone
+                    color = _c("warn", "#ffaa00")  # Yellow zone
                 else:
                     color = self.color
             else:
-                color = "#2a2a4a"  # Empty segment color
+                color = _c("surface3", "#2a2a4a")  # Empty segment color
             
             self.create_rectangle(
                 bar_x, segment_y,
@@ -109,15 +119,15 @@ class VUMeter(tk.Canvas):
             self.create_rectangle(
                 bar_x, peak_y - 3,
                 bar_x + bar_width, peak_y,
-                fill="#ffffff", outline=""
+                fill=_c("text", "#ffffff"), outline=""
             )
         
         # Draw channel label
         self.create_text(
             w // 2, h - 8,
             text=self.channel,
-            fill="#888888",
-            font=("Arial", 8, "bold")
+            fill=_c("muted", "#888888"),
+            font=("Segoe UI", 8, "bold")
         )
     
     def decay_peak(self):
@@ -208,7 +218,7 @@ class SoundVisualizer(tk.Canvas):
         self.width = 400
         self.height = 200
         
-        self.configure(width=self.width, height=self.height, bg="#0a0a1a", highlightthickness=0)
+        self.configure(width=self.width, height=self.height, bg=_c("canvas_bg", "#0a0e17"), highlightthickness=0)
         
     def add_data(self, channel: str, value: float):
         """Add a new data point for a channel."""
@@ -236,12 +246,12 @@ class SoundVisualizer(tk.Canvas):
         h = self.height
         
         # Background
-        self.create_rectangle(0, 0, w, h, fill="#0a0a1a", outline="")
+        self.create_rectangle(0, 0, w, h, fill=_c("canvas_bg", "#0a0e17"), outline="")
         
         # Draw grid lines
         for i in range(1, 4):
             y = i * h // 4
-            self.create_line(0, y, w, y, fill="#1a1a3a", dash=(2, 4))
+            self.create_line(0, y, w, y, fill=_c("border", "#1a1a3a"), dash=(2, 4))
         
         # Draw waveforms for each channel
         num_channels = len(self.channels)
@@ -289,7 +299,7 @@ class SoundVisualizer(tk.Canvas):
                 self.create_line(
                     0, (idx + 1) * channel_height,
                     w, (idx + 1) * channel_height,
-                    fill="#2a2a4a"
+                    fill=_c("surface3", "#2a2a4a")
                 )
 
 

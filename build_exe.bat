@@ -3,6 +3,9 @@ REM ============================================================
 REM Atmos Binaural Converter - Windows EXE Builder
 REM Creates a standalone .exe using PyInstaller
 REM ============================================================
+REM Work from the folder this script lives in, even when double-clicked
+REM from elsewhere (so the .spec path always resolves).
+cd /d "%~dp0"
 
 echo.
 echo ============================================================
@@ -27,22 +30,16 @@ if errorlevel 1 (
 )
 
 REM Install any required dependencies
-echo [2/4] Installing dependencies...
-pip install pillow
+echo [2/4] Installing dependencies (numpy/scipy/h5py/pillow/sounddevice)...
+pip install -r requirements.txt
 
 REM Create the EXE
 echo [3/4] Building EXE (this may take a minute)...
 echo.
 
-pyinstaller ^
-    --onefile ^
-    --windowed ^
-    --name "AtmosBinauralConverter" ^
-    --icon=NUL ^
-    --add-data "convert_atmos.py;." ^
-    --noconfirm ^
-    --clean ^
-    gui_app.py
+REM Use the committed spec (AtmosBinauralConverter.spec) so the
+REM module list, hidden imports, and bundled data stay in sync.
+pyinstaller AtmosBinauralConverter.spec --noconfirm --clean
 
 if errorlevel 1 (
     echo.
@@ -63,6 +60,7 @@ echo.
 echo   EXE Location: dist\AtmosBinauralConverter.exe
 echo.
 echo   You can copy this EXE to any Windows machine - no Python needed!
+echo   (FFmpeg must still be installed and in PATH)
 echo.
 echo ============================================================
 echo.

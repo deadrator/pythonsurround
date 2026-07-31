@@ -12,23 +12,52 @@ QUALITY_PRESETS = {"Low (128k)": "128k", "Medium (192k)": "192k", "High (256k)":
 FILTERS = {
     "standard": "aresample=48000,pan=stereo|c0=c0+0.707*c2+0.707*c4|c1=c1+0.707*c2+0.707*c5",
     "enhanced": "aresample=48000,pan=stereo|c0=c0+0.707*c2+0.707*c4|c1=c1+0.707*c2+0.707*c5,anequalizer=c0 f=80 w=200 g=4 t=1|c1 f=80 w=200 g=4 t=1,equalizer=f=2500:t=q:w=1:g=2,equalizer=f=8000:t=q:w=1:g=1",
-    "spatial": "aresample=48000,aformat=channel_layouts=5.1,pan=stereo|c0=0.87*c0+0.707*c2+0.707*c4+0.25*c5|c1=0.87*c1+0.707*c2+0.707*c5+0.25*c4,anequalizer=c0 f=60 w=150 g=5 t=1|c1 f=60 w=150 g=5 t=1,equalizer=f=2000:t=q:w=1.5:g=3,equalizer=f=6000:t=q:w=1:g=2,equalizer=f=10000:t=q:w=1:g=1.5,volume=0.95"
+    "spatial": "aresample=48000,aformat=channel_layouts=5.1,pan=stereo|c0=0.87*c0+0.707*c2+0.707*c4+0.25*c5|c1=0.87*c1+0.707*c2+0.707*c5+0.25*c4,anequalizer=c0 f=60 w=150 g=5 t=1|c1 f=60 w=150 g=5 t=1,equalizer=f=2000:t=q:w=1.5:g=3,equalizer=f=6000:t=q:w=1:g=2,equalizer=f=10000:t=q:w=1:g=1.5,volume=0.95",
+    "upmix51": "aresample=48000,surround=chl_out=5.1",
+    "upmix71": "aresample=48000,surround=chl_out=7.1",
+    "downmix51": "aresample=48000,pan=5.1|c0=c0|c1=c1|c2=c2|c3=c3|c4=c4+0.707*c6|c5=c5+0.707*c7",
 }
-METHOD_PRESETS = {"Standard Downmix": "standard", "Enhanced (Bass Boost)": "enhanced", "Spatial Binaural": "spatial", "HRTF (SOFA)": "hrtf", "Atmos IR Convolution": "atmos_ir", "Stereo Convolver (IR)": "stereo_conv", "Custom Speaker Layout": "custom"}
+METHOD_PRESETS = {
+    "Standard Downmix": "standard", "Enhanced (Bass Boost)": "enhanced",
+    "Spatial Binaural": "spatial", "HRTF (SOFA)": "hrtf",
+    "Atmos IR Convolution": "atmos_ir", "Stereo Convolver (IR)": "stereo_conv",
+    "Custom Speaker Layout": "custom",
+    "Surround Upmix to 5.1": "upmix51", "Surround Upmix to 7.1": "upmix71",
+    "Downmix 7.1 to 5.1": "downmix51", "Passthrough (Stream Copy)": "passthrough",
+}
+# Methods that keep the audio stream as-is (copy) - no filter, no re-encode
+PASSTHROUGH_METHODS = {"passthrough"}
+# Methods that always need the filter applied (even to stereo input)
+UPMIX_METHODS = {"upmix51", "upmix71"}
 CODEC_PRESETS = {
     "AAC (M4A)": {"codec": "aac", "ext": ".m4a"}, "AAC (MP4)": {"codec": "aac", "ext": ".mp4"},
     "MP3": {"codec": "mp3", "ext": ".mp3"}, "FLAC": {"codec": "flac", "ext": ".flac"},
     "Opus (OGG)": {"codec": "opus", "ext": ".ogg"}, "WAV": {"codec": "pcm_s16le", "ext": ".wav"},
+    "AC-4 (AC4)": {"codec": "ac4", "ext": ".ac4"},
+    "E-AC-3 (EAC3)": {"codec": "eac3", "ext": ".eac3"},
+    "TrueHD (MKV)": {"codec": "truehd", "ext": ".mkv"},
+    "DTS (DTS)": {"codec": "dts", "ext": ".dts"},
+    "ALAC (M4A)": {"codec": "alac", "ext": ".m4a"},
 }
+# Codecs that support a target bitrate
+BITRATE_CODECS = {"aac", "mp3", "opus", "ac3", "eac3", "ac4", "dts"}
+FFMPEG_CODEC_NAMES = {
+    "aac": "aac", "mp3": "libmp3lame", "flac": "flac", "opus": "libopus",
+    "pcm_s16le": "pcm_s16le", "ac4": "ac4", "eac3": "eac3",
+    "truehd": "truehd", "dts": "dca", "alac": "alac",
+}
+AUDIO_FILE_EXTS = {'.m4a', '.mp4', '.mkv', '.mka', '.mp3', '.flac', '.wav', '.aac',
+                   '.ogg', '.opus', '.ac3', '.eac3', '.ac4', '.thd', '.dts'}
 DEFAULT_POS_51 = {"FL": -30, "FR": 30, "FC": 0, "LFE": 0, "BL": -110, "BR": 110}
 DEFAULT_POS_71 = {"FL": -30, "FR": 30, "FC": 0, "LFE": 0, "SL": -90, "SR": 90, "BL": -150, "BR": 150}
 
 # Module imports with fallbacks
 try:
-    from convert_atmos import get_audio_info, get_channel_count
+    from convert_atmos import get_audio_info, get_channel_count, _input_codec
 except ImportError:
     get_audio_info = lambda f: None
     get_channel_count = lambda f: 2
+    _input_codec = lambda f: None
 
 try:
     from speaker_shifter import SpeakerConfig, generate_binaural_filter, get_presets
@@ -93,50 +122,128 @@ try:
 except ImportError:
     ChannelVisualizerPanel = None
 
+try:
+    from player_gui import MediaPlayerPanel
+except ImportError:
+    MediaPlayerPanel = None
+
+try:
+    from audio_codecs import (
+        is_codec_encoder_available as _codec_encoder_available,
+        is_codec_decoder_available as _codec_decoder_available,
+    )
+except ImportError:
+    _codec_encoder_available = lambda c: True
+    _codec_decoder_available = lambda c: True
+
+try:
+    from dark_theme import PALETTE, apply_dark_theme, style_listbox
+except ImportError:
+    PALETTE = {}
+    def apply_dark_theme(root): pass
+    def style_listbox(lb): pass
+
 
 class SpeakerCanvas(tk.Canvas):
+    """
+    Interactive speaker layout with drag positioning.
+
+    Drag a speaker anywhere on the ring: its angle rotates it around the
+    listener, and dragging toward/away from the center moves it NEAR/FAR
+    (distance feeds the distance->volume model, so closer = louder).
+    """
+
     def __init__(self, parent, config, on_change=None, **kw):
         super().__init__(parent, **kw)
         self.config = config; self.on_change = on_change
         self.speakers = {}; self.dragging = None
         self.cx, self.cy, self.r = 150, 150, 100
+        # distance range on screen: 0 (near) .. 1 (far)
+        self.near_frac = 0.38   # fraction of r at distance 0
+        self.far_frac = 1.06    # fraction of r at distance 1
         self.bind("<ButtonPress-1>", self.press)
         self.bind("<B1-Motion>", self.drag)
         self.bind("<ButtonRelease-1>", self.release)
         self.draw()
-    
+
+    # --- helpers -------------------------------------------------------
+    def _dist_to_radius(self, dist: float) -> float:
+        """Map normalized distance (0..1) to a screen radius."""
+        d = max(0.0, min(1.0, dist))
+        return self.r * (self.near_frac + (self.far_frac - self.near_frac) * d)
+
+    def _pos_to_angle_dist(self, x: float, y: float):
+        """Convert a canvas point to (angle_deg, distance)."""
+        dx, dy = x - self.cx, y - self.cy
+        angle = math.degrees(math.atan2(dy, dx)) + 90
+        if angle > 180: angle -= 360
+        raw = math.hypot(dx, dy) / self.r
+        dist = (raw - self.near_frac) / (self.far_frac - self.near_frac)
+        return angle, max(0.0, min(1.0, dist))
+
+    # --- drawing -------------------------------------------------------
     def draw(self):
+        P = PALETTE
         self.delete("all")
-        self.create_oval(self.cx-20, self.cy-20, self.cx+20, self.cy+20, fill="#2d2d44", outline="#4a4a6a", width=2)
-        self.create_oval(self.cx-self.r, self.cy-self.r, self.cx+self.r, self.cy+self.r, outline="#3a3a5a", dash=(5,5))
-        self.create_text(self.cx, self.cy-self.r-15, text="FRONT", fill="#888", font=("Arial",8))
+
+        # concentric distance rings
+        for frac in (0.55, 0.75, 1.0):
+            rr = self.r * frac
+            self.create_oval(self.cx-rr, self.cy-rr, self.cx+rr, self.cy+rr,
+                             outline=P.get("border", "#33415e"), dash=(4, 4))
+
+        # listener head at the center
+        self.create_oval(self.cx-16, self.cy-16, self.cx+16, self.cy+16,
+                         fill=P.get("head", "#e8edf6"), outline="")
+        self.create_text(self.cx, self.cy, text="YOU", fill=P.get("bg", "#0f1420"),
+                         font=("Segoe UI", 8, "bold"))
+
+        # NEAR / FAR zone labels
+        self.create_text(self.cx - self.r*0.55, self.cy + self.r*0.88,
+                         text="NEAR", fill=P.get("ok", "#3ddc84"), font=("Segoe UI", 7, "bold"))
+        self.create_text(self.cx + self.r*0.55, self.cy + self.r*0.88,
+                         text="FAR", fill=P.get("err", "#ff6b6b"), font=("Segoe UI", 7, "bold"))
+        self.create_text(self.cx, self.cy - self.r - 15, text="FRONT",
+                         fill=P.get("muted", "#93a0b8"), font=("Segoe UI", 8))
+
         self.speakers.clear()
         for label, angle in self.config.positions.items():
             if label == "LFE": continue
             rad = math.radians(angle - 90)
-            x, y = self.cx + self.r*math.cos(rad), self.cy + self.r*math.sin(rad)
+            dist = self.config.get_distance(label) if hasattr(self.config, 'get_distance') else 0.0
+            rr = self._dist_to_radius(dist)
+            x, y = self.cx + rr*math.cos(rad), self.cy + rr*math.sin(rad)
             vol = self.config.get_volume(label) if hasattr(self.config, 'get_volume') else 1.0
-            self.create_line(self.cx, self.cy, x, y, fill="#3a3a5a", dash=(3,3))
-            size = int(10 + vol * 8)
-            color = "#4a9eff" if label.startswith("F") else "#ff6b6b" if label.startswith("B") else "#6bff6b"
-            self.create_oval(x-size, y-size, x+size, y+size, fill=color, outline="white", width=2)
-            self.create_text(x, y, text=label, fill="white", font=("Arial",9,"bold"))
-            self.create_text(x, y+size+10, text=f"{int(vol*100)}%", fill="#aaa", font=("Arial",7))
-            self.speakers[label] = (x, y, size)
-    
+            self.create_line(self.cx, self.cy, x, y,
+                             fill=P.get("border", "#33415e"), dash=(3, 3))
+            size = int(9 + vol * 7)
+            color = P.get("front", "#4f8cff") if label.startswith("F") else \
+                    P.get("rear", "#ff6b6b") if label.startswith("B") else P.get("side", "#3ddc84")
+            self.create_oval(x-size, y-size, x+size, y+size, fill=color,
+                             outline="white", width=2)
+            self.create_text(x, y, text=label, fill="white", font=("Segoe UI", 9, "bold"))
+            # volume % and distance zone under the speaker
+            zone = "near" if dist < 0.33 else "far" if dist > 0.66 else "mid"
+            self.create_text(x, y+size+10, text=f"{int(vol*100)}%  {zone}",
+                             fill=P.get("muted", "#93a0b8"), font=("Segoe UI", 7))
+            self.speakers[label] = (x, y, size + 4)
+
+    # --- interaction ---------------------------------------------------
     def press(self, e):
-        for l, (x,y,s) in self.speakers.items():
-            if abs(e.x-x)<s and abs(e.y-y)<s: self.dragging = l; break
+        for l, (x, y, s) in self.speakers.items():
+            if abs(e.x-x) < s and abs(e.y-y) < s:
+                self.dragging = l; break
+
     def drag(self, e):
         if self.dragging:
-            dx, dy = e.x-self.cx, e.y-self.cy
-            angle = math.degrees(math.atan2(dy, dx)) + 90
-            if angle > 180: angle -= 360
-            dist = min(1.0, math.sqrt(dx*dx+dy*dy) / self.r)
+            angle, dist = self._pos_to_angle_dist(e.x, e.y)
             self.config.set_position(self.dragging, angle, dist)
             self.draw()
-            if self.on_change: self.on_change(self.dragging, angle)
+            if self.on_change:
+                self.on_change(self.dragging, angle)
+
     def release(self, e): self.dragging = None
+
     def update_config(self, c): self.config = c; self.draw()
 
 
@@ -175,8 +282,9 @@ class AtmosConverterGUI:
         self.load_settings()
     
     def setup_styles(self):
-        s = ttk.Style(); s.theme_use('clam')
-        s.configure('Convert.TButton', font=('Segoe UI', 11, 'bold'))
+        self.root.configure(bg=PALETTE.get("bg", "#0f1420"))
+        apply_dark_theme(self.root)
+        s = ttk.Style()
         s.configure('Cancel.TButton', font=('Segoe UI', 10))
         s.configure('Custom.Horizontal.TProgressbar', thickness=20)
     
@@ -188,20 +296,23 @@ class AtmosConverterGUI:
         speaker_tab = ttk.Frame(self.notebook, padding="15")
         ir_tab = ttk.Frame(self.notebook, padding="15")
         viz_tab = ttk.Frame(self.notebook, padding="15")
+        player_tab = ttk.Frame(self.notebook, padding="15")
         
         self.notebook.add(main_tab, text="  🎧 Converter  ")
         self.notebook.add(speaker_tab, text="  🔊 Speaker Shifter  ")
         self.notebook.add(ir_tab, text="  🎛️ Atmos IR  ")
+        self.notebook.add(player_tab, text="  🎵 Player  ")
         self.notebook.add(viz_tab, text="  📊 Visualizer  ")
         
         self.create_main_tab(main_tab)
         self.create_speaker_tab(speaker_tab)
         self.create_ir_tab(ir_tab)
+        self.create_player_tab(player_tab)
         self.create_viz_tab(viz_tab)
     
     def create_main_tab(self, parent):
         ttk.Label(parent, text="🎧 Dolby 5.1 to Binaural Converter", font=('Segoe UI', 16, 'bold')).pack(pady=(0,5))
-        ttk.Label(parent, text="Convert surround sound to stereo for TWS earbuds & headphones", font=('Segoe UI', 10), foreground='gray').pack(pady=(0,10))
+        ttk.Label(parent, text="Convert surround sound to stereo for TWS earbuds & headphones", font=('Segoe UI', 10), foreground=PALETTE.get("muted", "gray")).pack(pady=(0,10))
         
         # Files
         ff = ttk.LabelFrame(parent, text="Input Files", padding="10")
@@ -210,9 +321,13 @@ class AtmosConverterGUI:
         self.file_listbox = tk.Listbox(lf, height=4, selectmode=tk.EXTENDED, font=('Consolas',9))
         sb = ttk.Scrollbar(lf, orient=tk.VERTICAL, command=self.file_listbox.yview)
         self.file_listbox.configure(yscrollcommand=sb.set)
+        style_listbox(self.file_listbox)
         self.file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         sb.pack(side=tk.RIGHT, fill=tk.Y)
         bf = ttk.Frame(ff); bf.pack(fill=tk.X, pady=(8,0))
+        ttk.Label(bf, text="Format:", foreground=PALETTE.get("muted", "gray")).pack(side=tk.RIGHT, padx=(0,6))
+        ttk.Label(bf, text="M4A/MP4/MKV/AC3/E-AC-3/AC-4/TrueHD/DTS/FLAC/WAV/OGG…",
+                  foreground=PALETTE.get("muted", "gray")).pack(side=tk.RIGHT)
         ttk.Button(bf, text="➕ Add Files", command=self.add_files).pack(side=tk.LEFT, padx=(0,5))
         ttk.Button(bf, text="📁 Add Folder", command=self.add_folder).pack(side=tk.LEFT, padx=(0,5))
         ttk.Button(bf, text="🗑️ Remove", command=self.remove_selected).pack(side=tk.LEFT, padx=(0,5))
@@ -259,19 +374,19 @@ class AtmosConverterGUI:
         pf = ttk.Frame(parent); pf.pack(fill=tk.X, pady=(8,4))
         self.progress_var = tk.DoubleVar()
         ttk.Progressbar(pf, variable=self.progress_var, maximum=100, style='Custom.Horizontal.TProgressbar').pack(fill=tk.X, pady=(0,4))
-        self.status_label = ttk.Label(pf, text="Ready", foreground='gray')
+        self.status_label = ttk.Label(pf, text="Ready", foreground=PALETTE.get("muted", "gray"))
         self.status_label.pack(anchor=tk.W)
         
         # Buttons
         ab = ttk.Frame(parent); ab.pack(fill=tk.X, pady=(8,0))
-        self.convert_btn = ttk.Button(ab, text="🔄 Convert to Binaural", command=self.start_conversion, style='Convert.TButton')
+        self.convert_btn = ttk.Button(ab, text="🔄 Convert to Binaural", command=self.start_conversion, style='Accent.TButton')
         self.convert_btn.pack(side=tk.LEFT, padx=(0,8))
         self.cancel_btn = ttk.Button(ab, text="❌ Cancel", command=self.cancel_conversion, style='Cancel.TButton', state=tk.DISABLED)
         self.cancel_btn.pack(side=tk.LEFT)
     
     def create_speaker_tab(self, parent):
         ttk.Label(parent, text="🔊 Virtual Speaker Shifter", font=('Segoe UI', 16, 'bold')).pack(pady=(0,5))
-        ttk.Label(parent, text="Drag speakers to adjust position & distance (volume drops with distance)", font=('Segoe UI', 10), foreground='gray').pack(pady=(0,10))
+        ttk.Label(parent, text="Drag speakers around the ring to rotate them; drag toward the center (NEAR) or the edge (FAR) - volume follows distance", font=('Segoe UI', 10), foreground=PALETTE.get("muted", "gray")).pack(pady=(0,10))
         
         content = ttk.Frame(parent); content.pack(fill=tk.BOTH, expand=True)
         
@@ -285,7 +400,7 @@ class AtmosConverterGUI:
         lc.bind("<<ComboboxSelected>>", self.on_layout_change)
         ttk.Button(lf, text="Reset", command=self.reset_speakers).pack(side=tk.LEFT)
         
-        self.speaker_canvas = SpeakerCanvas(viz, self.speaker_config, on_change=self.on_speaker_change, width=300, height=300, bg="#1a1a2e", highlightthickness=0)
+        self.speaker_canvas = SpeakerCanvas(viz, self.speaker_config, on_change=self.on_speaker_change, width=300, height=300, bg=PALETTE.get("canvas_bg", "#0a0e17"), highlightthickness=0)
         self.speaker_canvas.pack(pady=8)
         
         self.speaker_controls_frame = ttk.LabelFrame(content, text="Controls", padding="8")
@@ -302,7 +417,7 @@ class AtmosConverterGUI:
         self.angle_displays = {}
         self.create_speaker_controls(ctrl)
         
-        ttk.Label(ctrl, text="💡 Drag speakers closer/farther\nto adjust volume automatically", font=('Segoe UI',8), foreground='gray').pack(pady=(8,0), anchor=tk.W)
+        ttk.Label(ctrl, text="💡 Drag in/out to move NEAR/FAR\n(volume drops with distance)", font=('Segoe UI',8), foreground=PALETTE.get("muted", "gray")).pack(pady=(8,0), anchor=tk.W)
     
     def create_speaker_controls(self, parent):
         for w in parent.winfo_children():
@@ -322,7 +437,7 @@ class AtmosConverterGUI:
     
     def create_ir_tab(self, parent):
         ttk.Label(parent, text="🎛️ Atmos IR Convolver & HeSuVi", font=('Segoe UI', 16, 'bold')).pack(pady=(0,5))
-        ttk.Label(parent, text="Use Atmos 48kHz/44.1kHz impulse response files for convolution", font=('Segoe UI', 10), foreground='gray').pack(pady=(0,10))
+        ttk.Label(parent, text="Use Atmos 48kHz/44.1kHz impulse response files for convolution", font=('Segoe UI', 10), foreground=PALETTE.get("muted", "gray")).pack(pady=(0,10))
         
         # IR Profiles
         irf = ttk.LabelFrame(parent, text="Atmos IR Profiles", padding="10")
@@ -338,7 +453,7 @@ class AtmosConverterGUI:
         # Info
         info = ttk.LabelFrame(parent, text="IR Directory Info", padding="10")
         info.pack(fill=tk.X, pady=(0,8))
-        self.ir_info_label = ttk.Label(info, text="Place WAV files in impulse_responses/ folder", foreground='gray')
+        self.ir_info_label = ttk.Label(info, text="Place WAV files in impulse_responses/ folder", foreground=PALETTE.get("muted", "gray"))
         self.ir_info_label.pack(anchor=tk.W)
         
         # Stereo Convolver IR (44/48 kHz)
@@ -348,7 +463,7 @@ class AtmosConverterGUI:
             "Workflow: run a stereo impulse through your processing to capture it as 4 IR files\n"
             "(name_44_left/right.wav, name_48_left/right.wav) - usable in foobar2000's Stereo\n"
             "Convolver (foo_dsp_stereoconv.dll), or convert directly with the 'Stereo Convolver (IR)' method."
-        ), foreground='gray').pack(anchor=tk.W, pady=(0,6))
+        ), foreground=PALETTE.get("muted", "gray")).pack(anchor=tk.W, pady=(0,6))
         sr1 = ttk.Frame(scf); sr1.pack(fill=tk.X, pady=(0,6))
         ttk.Label(sr1, text="IR Pair:").pack(side=tk.LEFT, padx=(0,4))
         self.stereo_ir_combo = ttk.Combobox(sr1, textvariable=self.stereo_ir_pair,
@@ -358,7 +473,7 @@ class AtmosConverterGUI:
         ttk.Button(sr1, text="Import Pair", command=self.import_stereo_ir).pack(side=tk.LEFT)
         sr2 = ttk.Frame(scf); sr2.pack(fill=tk.X)
         ttk.Button(sr2, text="📤 Export IR Files (current method)", command=self.export_stereo_ir).pack(side=tk.LEFT)
-        self.stereo_ir_info = ttk.Label(sr2, text="", foreground='gray')
+        self.stereo_ir_info = ttk.Label(sr2, text="", foreground=PALETTE.get("muted", "gray"))
         self.stereo_ir_info.pack(side=tk.LEFT, padx=(8,0))
         
         # HeSuVi
@@ -376,16 +491,26 @@ class AtmosConverterGUI:
         ttk.Label(r3, text="Import STL/OBJ head scan to generate personalized HRTF:").pack(anchor=tk.W)
         r4 = ttk.Frame(model_frame); r4.pack(fill=tk.X, pady=(4,0))
         ttk.Button(r4, text="Import 3D Model (STL/OBJ)", command=self.import_head_model).pack(side=tk.LEFT, padx=(0,8))
-        self.model_info = ttk.Label(r4, text="No model loaded", foreground='gray')
+        self.model_info = ttk.Label(r4, text="No model loaded", foreground=PALETTE.get("muted", "gray"))
         self.model_info.pack(side=tk.LEFT)
         
         self.refresh_ir_profiles()
         self.refresh_stereo_ir()
     
+    # === Player ===
+    def create_player_tab(self, parent):
+        if not MediaPlayerPanel:
+            ttk.Label(parent, text="player_gui module not found", foreground=PALETTE.get("muted", "gray")).pack()
+            return
+        panel = MediaPlayerPanel(parent, get_preview_filter=self.get_current_filter,
+                                 on_pref_change=self.save_settings)
+        panel.pack(fill=tk.BOTH, expand=True)
+        self.player_panel = panel
+    
     # === Visualizer ===
     def create_viz_tab(self, parent):
         if not ChannelVisualizerPanel:
-            ttk.Label(parent, text="visualizer_gui module not found", foreground='gray').pack()
+            ttk.Label(parent, text="visualizer_gui module not found", foreground=PALETTE.get("muted", "gray")).pack()
             return
         panel = ChannelVisualizerPanel(parent)
         panel.pack(fill=tk.BOTH, expand=True)
@@ -393,7 +518,11 @@ class AtmosConverterGUI:
     
     # === File Operations ===
     def add_files(self):
-        files = filedialog.askopenfilenames(title="Select Audio", filetypes=[("Audio","*.m4a *.mp4 *.mkv *.mp3 *.flac *.wav *.aac *.ogg"),("All","*.*")])
+        files = filedialog.askopenfilenames(
+            title="Select Audio",
+            filetypes=[("Audio", "*.m4a *.mp4 *.mkv *.mka *.mp3 *.flac *.wav *.aac *.ogg *.opus "
+                               "*.ac3 *.eac3 *.ac4 *.thd *.dts"),
+                       ("All", "*.*")])
         for f in files:
             if f not in self.input_files:
                 self.input_files.append(f)
@@ -403,9 +532,8 @@ class AtmosConverterGUI:
     def add_folder(self):
         folder = filedialog.askdirectory(title="Select Folder")
         if folder:
-            exts = {'.m4a','.mp4','.mkv','.mp3','.flac','.wav','.aac','.ogg'}
             for f in Path(folder).iterdir():
-                if f.is_file() and f.suffix.lower() in exts and str(f) not in self.input_files:
+                if f.is_file() and f.suffix.lower() in AUDIO_FILE_EXTS and str(f) not in self.input_files:
                     self.input_files.append(str(f))
                     self.file_listbox.insert(tk.END, f.name)
             self.update_file_count()
@@ -525,10 +653,11 @@ class AtmosConverterGUI:
         if not export_stereo_irs:
             messagebox.showerror("Error", "foobar_convolver module not found"); return
         method = METHOD_PRESETS.get(self.method.get(), "enhanced")
-        if method in ("atmos_ir", "stereo_conv"):
+        if method not in ("standard", "enhanced", "spatial", "hrtf", "custom"):
             messagebox.showwarning(
                 "Not Available",
-                "Select a processing method first (Standard / Enhanced / Spatial / HRTF / Custom)")
+                "IR export only works with processing methods\n"
+                "(Standard / Enhanced / Spatial / HRTF / Custom).")
             return
         name = simpledialog.askstring("Export IR Files", "Profile name (e.g. MyProfile):", parent=self.root)
         if not name:
@@ -581,36 +710,85 @@ class AtmosConverterGUI:
         if label in self.angle_displays:
             self.angle_displays[label].config(text=f"{value:.0f}°")
         self.speaker_canvas.draw()
+        self._speaker_live_update()
     
     def on_speaker_change(self, label, angle):
         if label in self.angle_vars:
             self.angle_vars[label].set(angle)
         if label in self.angle_displays:
             self.angle_displays[label].config(text=f"{angle:.0f}°")
+        self._speaker_live_update()
     
     def on_layout_change(self, e=None):
-        self.speaker_config = SpeakerConfig(self.speaker_layout.get())
+        self._apply_layout(self.speaker_layout.get())
+        self._speaker_live_update()
+    
+    def _apply_layout(self, layout):
+        """Rebuild the speaker config for the given layout (5.1 / 7.1)."""
+        self.speaker_layout.set(layout)
+        self.speaker_config = SpeakerConfig(layout)
         self.speaker_canvas.update_config(self.speaker_config)
-        self.create_speaker_controls(self.winfo_children()[0].winfo_children()[1].winfo_children()[2])
+        if hasattr(self, 'speaker_controls_frame'):
+            self.create_speaker_controls(self.speaker_controls_frame)
+    
+    def _speaker_live_update(self):
+        """
+        Live-apply speaker edits to a track currently playing in the Player tab.
+
+        The speaker positions only feed the 'Custom Speaker Layout' method, so
+        we switch to it if needed, then tell the player to restart its preview
+        with the freshly-generated filter chain (debounced in the panel).
+        """
+        # Positions only matter under the 'custom' method - switch to it.
+        method_name = self.method.get()
+        if METHOD_PRESETS.get(method_name, "") != "custom":
+            self.method.set("Custom Speaker Layout")
+        panel = getattr(self, 'player_panel', None)
+        if panel is not None:
+            try:
+                audio = getattr(panel, 'audio', None)
+                ch = getattr(audio, 'channels', 0) if audio else 0
+                # A 7.1 layout emits c6/c7 pan references that don't exist in
+                # a 5.1 (6ch) source - ffmpeg would error and kill playback.
+                if 0 < ch < 8 and self.speaker_layout.get() == "7.1":
+                    self._apply_layout("5.1")
+                # Give feedback when the track has nothing to shift
+                if 0 < ch < 6:
+                    self.status_label.config(
+                        text="💡 Speaker Shifter needs a 5.1/7.1 source - this track has too few channels")
+                panel.on_filter_changed()
+            except Exception:
+                pass
     
     def on_method_change(self, e=None):
-        if self.method.get() == "Custom Speaker Layout":
+        method_name = self.method.get()
+        method = METHOD_PRESETS.get(method_name, "enhanced")
+        if method in PASSTHROUGH_METHODS:
+            self.status_label.config(text="💡 Passthrough copies the stream without re-encoding — pick a Format "
+                                          "preset that matches the input (AC-4→AC4, TrueHD→MKV, DTS→DTS)")
+        elif method_name == "Custom Speaker Layout":
             self.notebook.select(1)
-        elif self.method.get() in ("Atmos IR Convolution", "Stereo Convolver (IR)"):
+        elif method_name in ("Atmos IR Convolution", "Stereo Convolver (IR)"):
             self.notebook.select(2)
+        else:
+            self.status_label.config(text="Ready")
     
     def apply_preset(self, name):
         presets = get_presets()
         if name in presets:
             pos = presets[name]
             layout = "7.1" if len(pos) > 6 else "5.1"
-            self.speaker_layout.set(layout)
-            self.speaker_config = SpeakerConfig(layout)
+            self._apply_layout(layout)
             for l, a in pos.items():
                 self.speaker_config.set_position(l, a)
-            self.speaker_canvas.update_config(self.speaker_config)
-            if hasattr(self, 'speaker_controls_frame'):
-                self.create_speaker_controls(self.speaker_controls_frame)
+            self.speaker_canvas.draw()
+            # _apply_layout built the sliders from the default angles - refresh
+            # them so they reflect the applied preset positions.
+            for l, v in self.angle_vars.items():
+                v.set(self.speaker_config.get_position(l))
+            for l, d in self.angle_displays.items():
+                d.config(text=f"{self.speaker_config.get_position(l):.0f}°")
+            self._speaker_live_update()
     
     def reset_speakers(self):
         self.speaker_config.reset()
@@ -619,10 +797,13 @@ class AtmosConverterGUI:
             v.set(self.speaker_config.get_position(l))
         for l, d in self.angle_displays.items():
             d.config(text=f"{self.speaker_config.get_position(l):.0f}°")
+        self._speaker_live_update()
     
     # === Conversion ===
     def get_current_filter(self):
         method = METHOD_PRESETS.get(self.method.get(), "enhanced")
+        if method in PASSTHROUGH_METHODS:
+            return None
         if method == "custom":
             return generate_binaural_filter(self.speaker_config)
         elif method == "hrtf":
@@ -636,17 +817,40 @@ class AtmosConverterGUI:
     def get_output_ext(self):
         return CODEC_PRESETS.get(self.codec_format.get(), {"ext": ".m4a"})["ext"]
     
+    def get_output_container(self):
+        """FFmpeg container format for the current codec preset."""
+        ext = self.get_output_ext()
+        fmt_map = {".m4a": "ipod", ".mp4": "mp4", ".mkv": "matroska", ".mka": "matroska",
+                   ".mp3": "mp3", ".flac": "flac", ".wav": "wav", ".ogg": "ogg",
+                   ".ac4": "ac4", ".eac3": "eac3", ".dts": "dts", ".thd": "truehd"}
+        return fmt_map.get(ext, "ipod")
+    
     def get_codec_args(self):
         codec = CODEC_PRESETS.get(self.codec_format.get(), {"codec": "aac"})["codec"]
-        codec_map = {"aac":"aac","mp3":"libmp3lame","flac":"flac","opus":"libopus","pcm_s16le":"pcm_s16le"}
-        args = ["-c:a", codec_map.get(codec, codec)]
-        if codec in ["aac","mp3","opus"]:
+        ffmpeg_name = FFMPEG_CODEC_NAMES.get(codec, codec)
+        args = ["-c:a", ffmpeg_name]
+        if codec in BITRATE_CODECS:
             args.extend(["-b:a", QUALITY_PRESETS.get(self.quality.get(), "256k")])
+        if codec == "truehd":
+            args.extend(["-strict", "experimental"])  # TrueHD encoder is experimental
         return args
     
     def convert_file(self, input_file, output_file):
         method = METHOD_PRESETS.get(self.method.get(), "enhanced")
-        
+
+        # The input stream must be decodable for any method that re-encodes.
+        # Some codecs (e.g. AC-4) have no decoder in FFmpeg builds, so they
+        # can only be remuxed via 'Passthrough (Stream Copy)'.
+        if method not in PASSTHROUGH_METHODS:
+            in_codec = _input_codec(input_file)
+            if in_codec and _codec_decoder_available(in_codec) is False:
+                self.root.after(0, lambda ic=in_codec: messagebox.showwarning(
+                    "Input Codec Not Decodable",
+                    f"FFmpeg has no decoder for '{ic}' audio, so this file can\n"
+                    "only be REMUXED with method 'Passthrough (Stream Copy)'.\n"
+                    "It can't be played or converted to another format here."))
+                return False
+
         # Atmos IR convolution mode
         if method == "atmos_ir" and self.convolver:
             profile = self.atmos_ir_profile.get() or None
@@ -667,11 +871,42 @@ class AtmosConverterGUI:
             return apply_stereo_convolution(input_file, output_file, pairs, 48000,
                                             codec_args, ["-movflags", "+faststart"])
         
+        # Passthrough / stream copy (AC-4, TrueHD, DTS, E-AC-3, ...)
+        if method in PASSTHROUGH_METHODS:
+            container = self.get_output_container()
+            cmd = ["ffmpeg", "-i", input_file, "-c:a", "copy", "-map_metadata", "0",
+                   "-f", container, "-y", output_file]
+            with self.process_lock:
+                self.current_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                self.current_process.communicate()
+                return self.current_process.returncode == 0
+            except: return False
+            finally:
+                with self.process_lock: self.current_process = None
+        
+        # AC-4 encode requires an encoder in FFmpeg
+        codec = CODEC_PRESETS.get(self.codec_format.get(), {"codec": "aac"})["codec"]
+        if codec == "ac4":
+            if _codec_encoder_available("ac4") is False:
+                self.root.after(0, lambda: messagebox.showwarning(
+                    "AC-4 Encoding Unavailable",
+                    "This FFmpeg build has no AC-4 encoder.\n"
+                    "Use method 'Passthrough (Stream Copy)' to remux AC-4, or pick\n"
+                    "another output codec (E-AC-3 / TrueHD / DTS / AAC)."))
+                return False
+        
         filter_str = self.get_current_filter()
         channels = get_channel_count(input_file)
+        if method == "downmix51" and channels < 8:
+            self.root.after(0, lambda: messagebox.showwarning(
+                "Input Mismatch",
+                "'Downmix 7.1 to 5.1' requires a 7.1 (8-channel) input.\n"
+                f"'{os.path.basename(input_file)}' has {channels} channels."))
+            return False
         codec_args = self.get_codec_args()
         
-        if channels > 2:
+        if channels > 2 or method in UPMIX_METHODS:
             cmd = ["ffmpeg", "-i", input_file, "-af", filter_str] + codec_args + ["-ar", "48000", "-y", output_file]
         else:
             cmd = ["ffmpeg", "-i", input_file] + codec_args + ["-ar", "48000", "-y", output_file]
@@ -695,6 +930,15 @@ class AtmosConverterGUI:
         if method == "stereo_conv" and not self.stereo_ir_pair.get():
             messagebox.showwarning("No IR Pair", "Select an IR pair in the Atmos IR tab (or export one first)")
             return
+        codec = CODEC_PRESETS.get(self.codec_format.get(), {"codec": "aac"})["codec"]
+        if codec == "ac4" and method not in PASSTHROUGH_METHODS:
+            if _codec_encoder_available("ac4") is False:
+                messagebox.showwarning(
+                    "AC-4 Encoding Unavailable",
+                    "This FFmpeg build has no AC-4 encoder.\n"
+                    "Switch the method to 'Passthrough (Stream Copy)' to remux AC-4,\n"
+                    "or choose another output codec.")
+                return
         self.is_converting = True; self.cancel_flag = False
         self.convert_btn.config(state=tk.DISABLED); self.cancel_btn.config(state=tk.NORMAL)
         self.progress_var.set(0)
@@ -748,11 +992,23 @@ class AtmosConverterGUI:
                 if 'method' in s:
                     rm = {v:k for k,v in METHOD_PRESETS.items()}
                     if s['method'] in rm: self.method.set(rm[s['method']])
+                panel = getattr(self, 'player_panel', None)
+                if panel:
+                    try:
+                        panel.restore_prefs(s)
+                    except Exception:
+                        pass
         except: pass
     
     def save_settings(self):
         try:
             s = {'output_dir': self.output_dir.get(), 'quality': self.quality.get(), 'method': METHOD_PRESETS.get(self.method.get(), 'enhanced')}
+            panel = getattr(self, 'player_panel', None)
+            if panel:
+                try:
+                    s.update(panel.save_prefs())
+                except Exception:
+                    pass
             (Path.home() / ".atmos_converter_settings.json").write_text(json.dumps(s, indent=2))
         except: pass
     
@@ -760,11 +1016,13 @@ class AtmosConverterGUI:
         if self.is_converting:
             if not messagebox.askyesno("Cancel?", "Conversion running. Exit?"): return
             self.cancel_conversion()
-        if getattr(self, 'visualizer_panel', None):
-            try:
-                self.visualizer_panel.stop_all()
-            except Exception:
-                pass
+        for panel_name in ('visualizer_panel', 'player_panel'):
+            panel = getattr(self, panel_name, None)
+            if panel:
+                try:
+                    panel.stop_all()
+                except Exception:
+                    pass
         self.save_settings(); self.root.destroy()
 
 

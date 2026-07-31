@@ -27,6 +27,15 @@ except ImportError:  # pragma: no cover
     VUMeter = SoundVisualizer = None
     CHANNEL_COLORS = {}
 
+try:
+    from dark_theme import PALETTE
+except ImportError:  # pragma: no cover
+    PALETTE = {}
+
+
+def _c(name: str, default: str) -> str:
+    return PALETTE.get(name, default)
+
 TICK_MS = 33          # GUI update interval (~30 fps)
 LOOP_SPIN_MS = 30     # worker loop sleep
 
@@ -56,11 +65,11 @@ class ChannelVisualizerPanel(ttk.Frame):
         top = ttk.Frame(self)
         top.pack(fill=tk.X, pady=(0, 6))
         ttk.Button(top, text="📂 Open Audio", command=self.open_file).pack(side=tk.LEFT, padx=(0, 6))
-        self.file_label = ttk.Label(top, text="No file loaded", foreground="gray")
+        self.file_label = ttk.Label(top, text="No file loaded", foreground=_c("muted", "gray"))
         self.file_label.pack(side=tk.LEFT, padx=(0, 10))
         self.capture_btn = ttk.Button(top, text="🎙 System Audio", command=self.toggle_capture)
         self.capture_btn.pack(side=tk.RIGHT)
-        self.info_label = ttk.Label(top, text="", foreground="gray")
+        self.info_label = ttk.Label(top, text="", foreground=_c("muted", "gray"))
         self.info_label.pack(side=tk.RIGHT, padx=(0, 10))
 
         transport = ttk.Frame(self)
@@ -76,25 +85,26 @@ class ChannelVisualizerPanel(ttk.Frame):
                               command=self._on_seek)
         self.seek.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.hint_label = ttk.Label(self, text="Open an audio file to visualize its channels, or capture system audio.",
-                                    foreground="gray", font=("Segoe UI", 9))
+                                    foreground=_c("muted", "gray"), font=("Segoe UI", 9))
         self.hint_label.pack(anchor=tk.W, pady=(0, 4))
 
         self.meter_frame = ttk.LabelFrame(self, text="Channel Levels (VU)", padding="6")
         self.meter_frame.pack(fill=tk.X, pady=(0, 6))
-        self.empty_meters = ttk.Label(self.meter_frame, text="—", foreground="gray")
+        self.empty_meters = ttk.Label(self.meter_frame, text="—", foreground=_c("muted", "gray"))
         self.empty_meters.pack(pady=10)
 
         self.viz_frame = ttk.LabelFrame(self, text="Waveform", padding="6")
         self.viz_frame.pack(fill=tk.BOTH, expand=True)
         self.empty_viz = ttk.Label(self.viz_frame, text="Load a file to see per-channel waveforms",
-                                   foreground="gray")
+                                   foreground=_c("muted", "gray"))
         self.empty_viz.pack(pady=30)
 
     # ---------------- File loading ----------------
     def open_file(self):
         f = filedialog.askopenfilename(
             title="Select Audio",
-            filetypes=[("Audio", "*.m4a *.mp4 *.mkv *.mp3 *.flac *.wav *.aac *.ogg *.opus *.ac3 *.eac3"),
+            filetypes=[("Audio", "*.m4a *.mp4 *.mkv *.mka *.mp3 *.flac *.wav *.aac *.ogg *.opus "
+                               "*.ac3 *.eac3 *.ac4 *.thd *.dts"),
                        ("All", "*.*")])
         if f:
             self.load_file(f)
@@ -140,12 +150,12 @@ class ChannelVisualizerPanel(ttk.Frame):
         meter_row.pack(fill=tk.X)
         self.meters = {}
         for name in self.channel_names:
-            color = CHANNEL_COLORS.get(name, "#4a9eff")
+            color = CHANNEL_COLORS.get(name, _c("front", "#4a9eff"))
             vu = VUMeter(meter_row, channel=name, color=color, width=34, height=170)
             vu.pack(side=tk.LEFT, padx=3)
             self.meters[name] = vu
         ttk.Label(meter_row, text="← rears/left side        front        right side/rears →",
-                  foreground="gray").pack(side=tk.LEFT, padx=(10, 0))
+                  foreground=_c("muted", "gray")).pack(side=tk.LEFT, padx=(10, 0))
 
         self.visualizer = SoundVisualizer(self.viz_frame, channels=self.channel_names,
                                           width=640, height=240)
@@ -214,6 +224,7 @@ class ChannelVisualizerPanel(ttk.Frame):
             self.capture_btn.config(text="⏹ Stop Capture")
             self.file_label.config(text="System audio capture (live)")
             self.info_label.config(text="WASAPI loopback / monitor")
+            self.info_label.config(foreground=_c("ok", "gray"))
             self.channel_names = self.capture.channel_names
             self._rebuild_visuals()
         else:
@@ -237,7 +248,7 @@ class ChannelVisualizerPanel(ttk.Frame):
                 return
             self.capture_btn.config(text="🎙 System Audio")
             self.file_label.config(text="No file loaded")
-            self.info_label.config(text="")
+            self.info_label.config(text="", foreground=_c("muted", "gray"))
             self.channel_names = []
             self._rebuild_visuals()
         except Exception:
