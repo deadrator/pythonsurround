@@ -1,0 +1,11 @@
+# Keep Gradle wrapper scripts unix-line-ended on every platform
+gradlew text eol=lf
+gradlew.bat text eol=crlf
+gradle/wrapper/gradle-wrapper.jar binary
+
+# Kotlin / Gradle sources - normal text handling
+*.kt text eol=lf
+*.kts text eol=lf
+*.gradle text eol=lf
+*.toml text eol=lf
+*.properties text eol=lf

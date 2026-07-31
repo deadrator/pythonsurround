@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Atmos Binaural Converter</string>
+    <string name="tab_converter">Converter</string>
+    <string name="tab_shifter">Speaker Shifter</string>
+    <string name="tab_player">Player</string>
+    <string name="tab_visualizer">Visualizer</string>
+</resources>
