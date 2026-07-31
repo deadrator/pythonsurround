@@ -49,6 +49,17 @@ except ImportError:
     HRTFGenerator = None
     SofaFileReader = None
 
+# Import stereo convolver IR support
+try:
+    from foobar_convolver import (
+        export_stereo_irs, resolve_stereo_ir_pair, apply_stereo_convolution,
+        STEREO_IR_DIR
+    )
+except ImportError:
+    export_stereo_irs = resolve_stereo_ir_pair = None
+    apply_stereo_convolution = None
+    STEREO_IR_DIR = None
+
 # Quality presets
 QUALITY_PRESETS = {
     "low": "128k",
@@ -148,7 +159,9 @@ def convert_to_binaural(
     method: str = "enhanced",
     codec: str = "aac",
     container: str = "m4a",
-    sofa_file: Optional[str] = None
+    sofa_file: Optional[str] = None,
+    ir_base: Optional[str] = None,
+    ir_dir: Optional[str] = None
 ) -> bool:
     """
     Convert multi-channel audio to binaural stereo.
@@ -161,11 +174,39 @@ def convert_to_binaural(
         codec: Output codec name
         container: Output container name
         sofa_file: Path to SOFA file for HRTF processing
+        ir_base: Stereo convolver IR pair base name ({name}_44_left.wav etc.)
+        ir_dir: Directory containing the IR pair
     
     Returns:
         True if successful, False otherwise
     """
     bitrate = QUALITY_PRESETS.get(quality, "256k")
+    
+    # Stereo convolver IR mode (44/48 kHz L/R impulse responses)
+    if ir_base:
+        if not apply_stereo_convolution or not resolve_stereo_ir_pair:
+            print("  ✗ foobar_convolver/scipy module not available")
+            return False
+        ir_dir = ir_dir or (str(STEREO_IR_DIR) if STEREO_IR_DIR else "impulse_responses/stereo")
+        pairs = resolve_stereo_ir_pair(ir_base, ir_dir)
+        if not pairs:
+            print(f"  ✗ IR pair '{ir_base}' not found in {ir_dir}")
+            print(f"    Expected files like {ir_base}_44_left.wav / {ir_base}_48_right.wav")
+            return False
+        codec_args = get_ffmpeg_encode_args(codec, bitrate, 48000)
+        output_args = get_output_args(container)
+        print(f"\n  Method:   Stereo Convolver (IR pair: {ir_base})")
+        print(f"  IR Dir:   {ir_dir}")
+        print(f"  Rates:    {', '.join(str(r) for r in sorted(pairs))}")
+        print(f"\n  Converting...")
+        ok = apply_stereo_convolution(input_file, output_file, pairs, 48000,
+                                      codec_args, output_args)
+        if ok:
+            input_size = os.path.getsize(input_file) / (1024 * 1024)
+            output_size = os.path.getsize(output_file) / (1024 * 1024)
+            print(f"\n  ✓ Conversion successful!")
+            print(f"  Size: {input_size:.1f}MB → {output_size:.1f}MB")
+        return ok
     
     # Get filter based on method
     if method == "hrtf" and sofa_file:
@@ -278,7 +319,9 @@ def convert_to_binaural(
 def process_batch(
     input_dir: str,
     quality: str = "high",
-    method: str = "enhanced"
+    method: str = "enhanced",
+    ir_base: Optional[str] = None,
+    ir_dir: Optional[str] = None
 ) -> Tuple[int, int]:
     """
     Process all M4A files in a directory.
@@ -304,7 +347,8 @@ def process_batch(
         base_name = os.path.splitext(file_path)[0]
         output_file = f"{base_name}_binaural.m4a"
         
-        if convert_to_binaural(file_path, output_file, quality, method):
+        if convert_to_binaural(file_path, output_file, quality, method,
+                               ir_base=ir_base, ir_dir=ir_dir):
             success += 1
         else:
             failed += 1
@@ -314,6 +358,15 @@ def process_batch(
 
 def main():
     """Main entry point."""
+    # Ensure Unicode output (✓/✗/→) never crashes the CLI when stdout/stderr
+    # is a pipe with a non-UTF-8 encoding (e.g. cp1252 on Windows).
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except Exception:
+                pass
+    
     parser = argparse.ArgumentParser(
         description="Convert Dolby 5.1 to Binaural Atmos for TWS earbuds",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -353,6 +406,21 @@ Examples:
         action="store_true",
         help="Batch mode: process all M4A files in input directory"
     )
+    parser.add_argument(
+        "--export-ir",
+        metavar="NAME",
+        help="Export stereo IR files (44/48kHz L/R) capturing the selected method's processing"
+    )
+    parser.add_argument(
+        "--convolve",
+        metavar="IR_BASE",
+        help="Convert using a stereo IR pair (matches {name}_44_left.wav / {name}_48_right.wav etc.)"
+    )
+    parser.add_argument(
+        "--ir-dir",
+        default=None,
+        help="Directory for IR export/convolution (default: impulse_responses/stereo)"
+    )
     
     args = parser.parse_args()
     
@@ -372,6 +440,27 @@ Examples:
         print("\nOr download from: https://ffmpeg.org/download.html")
         sys.exit(1)
     
+    # Export IR mode
+    if args.export_ir:
+        if not export_stereo_irs:
+            print("\n[ERROR] foobar_convolver/scipy module not available")
+            sys.exit(1)
+        chain = FILTER_PRESETS.get(args.method, FILTER_PRESETS["enhanced"])["filter"]
+        ir_dir = args.ir_dir or (str(STEREO_IR_DIR) if STEREO_IR_DIR else "impulse_responses/stereo")
+        print(f"\n  Exporting IR files for method '{args.method}'...")
+        print(f"  Name:    {args.export_ir}")
+        print(f"  Dir:     {ir_dir}")
+        created = export_stereo_irs(chain, args.export_ir, ir_dir)
+        if created:
+            print(f"\n  ✓ Created {len(created)} IR files:")
+            for p in created:
+                print(f"    - {p}")
+            print("\n  Use them in foobar2000's Stereo Convolver (foo_dsp_stereoconv.dll)")
+            print("  or convert with: python convert_atmos.py file.m4a --convolve <name>")
+            sys.exit(0)
+        print("\n[ERROR] IR export failed - see console output")
+        sys.exit(1)
+    
     # Batch mode
     if args.batch:
         if not args.input or not os.path.isdir(args.input):
@@ -379,7 +468,8 @@ Examples:
             print("Usage: python convert_atmos.py --batch /path/to/music")
             sys.exit(1)
         
-        success, failed = process_batch(args.input, args.quality, args.method)
+        success, failed = process_batch(args.input, args.quality, args.method,
+                                        args.convolve, args.ir_dir)
         
         print(f"\n{'='*60}")
         print(f"  Batch Complete!")
@@ -409,7 +499,9 @@ Examples:
         args.input,
         args.output,
         args.quality,
-        args.method
+        args.method,
+        ir_base=args.convolve,
+        ir_dir=args.ir_dir
     )
     
     if success:

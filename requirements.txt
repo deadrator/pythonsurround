@@ -16,5 +16,8 @@ pillow>=9.0.0
 # Audio processing (optional)
 # soundfile>=0.10.0
 
+# System audio capture for the Channel Visualizer (WASAPI loopback / PulseAudio monitor)
+# sounddevice>=0.4.0
+
 # Building (optional)
 # pyinstaller>=5.0.0

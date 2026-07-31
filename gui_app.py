@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Atmos Binaural Converter - Complete GUI Application"""
 import os, sys, subprocess, threading, tkinter as tk, math, json
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 from pathlib import Path
 from typing import Optional, List, Dict
 
@@ -14,7 +14,7 @@ FILTERS = {
     "enhanced": "aresample=48000,pan=stereo|c0=c0+0.707*c2+0.707*c4|c1=c1+0.707*c2+0.707*c5,anequalizer=c0 f=80 w=200 g=4 t=1|c1 f=80 w=200 g=4 t=1,equalizer=f=2500:t=q:w=1:g=2,equalizer=f=8000:t=q:w=1:g=1",
     "spatial": "aresample=48000,aformat=channel_layouts=5.1,pan=stereo|c0=0.87*c0+0.707*c2+0.707*c4+0.25*c5|c1=0.87*c1+0.707*c2+0.707*c5+0.25*c4,anequalizer=c0 f=60 w=150 g=5 t=1|c1 f=60 w=150 g=5 t=1,equalizer=f=2000:t=q:w=1.5:g=3,equalizer=f=6000:t=q:w=1:g=2,equalizer=f=10000:t=q:w=1:g=1.5,volume=0.95"
 }
-METHOD_PRESETS = {"Standard Downmix": "standard", "Enhanced (Bass Boost)": "enhanced", "Spatial Binaural": "spatial", "HRTF (SOFA)": "hrtf", "Atmos IR Convolution": "atmos_ir", "Custom Speaker Layout": "custom"}
+METHOD_PRESETS = {"Standard Downmix": "standard", "Enhanced (Bass Boost)": "enhanced", "Spatial Binaural": "spatial", "HRTF (SOFA)": "hrtf", "Atmos IR Convolution": "atmos_ir", "Stereo Convolver (IR)": "stereo_conv", "Custom Speaker Layout": "custom"}
 CODEC_PRESETS = {
     "AAC (M4A)": {"codec": "aac", "ext": ".m4a"}, "AAC (MP4)": {"codec": "aac", "ext": ".mp4"},
     "MP3": {"codec": "mp3", "ext": ".mp3"}, "FLAC": {"codec": "flac", "ext": ".flac"},
@@ -66,9 +66,17 @@ except ImportError:
     HeadModelParser = None
 
 try:
-    from foobar_convolver import FoobarConvolver, get_convolver
+    from foobar_convolver import (
+        FoobarConvolver, get_convolver, export_stereo_irs,
+        scan_stereo_ir_pairs, resolve_stereo_ir_pair, import_stereo_ir_pair,
+        apply_stereo_convolution, sanitize_ir_name, STEREO_IR_DIR
+    )
 except ImportError:
     FoobarConvolver = get_convolver = None
+    export_stereo_irs = scan_stereo_ir_pairs = None
+    resolve_stereo_ir_pair = import_stereo_ir_pair = None
+    apply_stereo_convolution = sanitize_ir_name = None
+    STEREO_IR_DIR = Path("impulse_responses") / "stereo"
 
 try:
     from hesuvi_support import HeSuViManager, HeSuViConverter
@@ -79,6 +87,11 @@ try:
     from volume_visualizer import VolumeVisualizerPanel
 except ImportError:
     VolumeVisualizerPanel = None
+
+try:
+    from visualizer_gui import ChannelVisualizerPanel
+except ImportError:
+    ChannelVisualizerPanel = None
 
 
 class SpeakerCanvas(tk.Canvas):
@@ -142,6 +155,8 @@ class AtmosConverterGUI:
         self.sofa_file = tk.StringVar(value="")
         self.hesuvi_profile = tk.StringVar(value="")
         self.atmos_ir_profile = tk.StringVar(value="")
+        self.stereo_ir_pair = tk.StringVar(value="")
+        self.stereo_ir_dir = STEREO_IR_DIR
         self.head_model_file = tk.StringVar(value="")
         self.is_converting = False
         self.cancel_flag = False
@@ -172,14 +187,17 @@ class AtmosConverterGUI:
         main_tab = ttk.Frame(self.notebook, padding="15")
         speaker_tab = ttk.Frame(self.notebook, padding="15")
         ir_tab = ttk.Frame(self.notebook, padding="15")
+        viz_tab = ttk.Frame(self.notebook, padding="15")
         
         self.notebook.add(main_tab, text="  🎧 Converter  ")
         self.notebook.add(speaker_tab, text="  🔊 Speaker Shifter  ")
         self.notebook.add(ir_tab, text="  🎛️ Atmos IR  ")
+        self.notebook.add(viz_tab, text="  📊 Visualizer  ")
         
         self.create_main_tab(main_tab)
         self.create_speaker_tab(speaker_tab)
         self.create_ir_tab(ir_tab)
+        self.create_viz_tab(viz_tab)
     
     def create_main_tab(self, parent):
         ttk.Label(parent, text="🎧 Dolby 5.1 to Binaural Converter", font=('Segoe UI', 16, 'bold')).pack(pady=(0,5))
@@ -323,6 +341,26 @@ class AtmosConverterGUI:
         self.ir_info_label = ttk.Label(info, text="Place WAV files in impulse_responses/ folder", foreground='gray')
         self.ir_info_label.pack(anchor=tk.W)
         
+        # Stereo Convolver IR (44/48 kHz)
+        scf = ttk.LabelFrame(parent, text="🎯 Stereo Convolver IR (44/48 kHz)", padding="10")
+        scf.pack(fill=tk.X, pady=(0,8))
+        ttk.Label(scf, text=(
+            "Workflow: run a stereo impulse through your processing to capture it as 4 IR files\n"
+            "(name_44_left/right.wav, name_48_left/right.wav) - usable in foobar2000's Stereo\n"
+            "Convolver (foo_dsp_stereoconv.dll), or convert directly with the 'Stereo Convolver (IR)' method."
+        ), foreground='gray').pack(anchor=tk.W, pady=(0,6))
+        sr1 = ttk.Frame(scf); sr1.pack(fill=tk.X, pady=(0,6))
+        ttk.Label(sr1, text="IR Pair:").pack(side=tk.LEFT, padx=(0,4))
+        self.stereo_ir_combo = ttk.Combobox(sr1, textvariable=self.stereo_ir_pair,
+                                            values=self.get_stereo_ir_pairs(), state="readonly", width=25)
+        self.stereo_ir_combo.pack(side=tk.LEFT, padx=(0,8))
+        ttk.Button(sr1, text="Refresh", command=self.refresh_stereo_ir).pack(side=tk.LEFT, padx=(0,8))
+        ttk.Button(sr1, text="Import Pair", command=self.import_stereo_ir).pack(side=tk.LEFT)
+        sr2 = ttk.Frame(scf); sr2.pack(fill=tk.X)
+        ttk.Button(sr2, text="📤 Export IR Files (current method)", command=self.export_stereo_ir).pack(side=tk.LEFT)
+        self.stereo_ir_info = ttk.Label(sr2, text="", foreground='gray')
+        self.stereo_ir_info.pack(side=tk.LEFT, padx=(8,0))
+        
         # HeSuVi
         hsf = ttk.LabelFrame(parent, text="HeSuVi Profile Management", padding="10")
         hsf.pack(fill=tk.X, pady=(0,8))
@@ -342,6 +380,16 @@ class AtmosConverterGUI:
         self.model_info.pack(side=tk.LEFT)
         
         self.refresh_ir_profiles()
+        self.refresh_stereo_ir()
+    
+    # === Visualizer ===
+    def create_viz_tab(self, parent):
+        if not ChannelVisualizerPanel:
+            ttk.Label(parent, text="visualizer_gui module not found", foreground='gray').pack()
+            return
+        panel = ChannelVisualizerPanel(parent)
+        panel.pack(fill=tk.BOTH, expand=True)
+        self.visualizer_panel = panel
     
     # === File Operations ===
     def add_files(self):
@@ -440,6 +488,68 @@ class AtmosConverterGUI:
             except Exception as e:
                 messagebox.showerror("Error", str(e))
     
+    # === Stereo Convolver IR ===
+    def get_stereo_ir_pairs(self):
+        if scan_stereo_ir_pairs:
+            try:
+                return scan_stereo_ir_pairs(self.stereo_ir_dir)
+            except Exception:
+                pass
+        return []
+    
+    def refresh_stereo_ir(self):
+        pairs = self.get_stereo_ir_pairs()
+        self.stereo_ir_combo['values'] = pairs
+        if self.stereo_ir_pair.get() not in pairs:
+            self.stereo_ir_pair.set(pairs[0] if pairs else "")
+    
+    def import_stereo_ir(self):
+        if not import_stereo_ir_pair:
+            messagebox.showerror("Error", "foobar_convolver module not found"); return
+        f = filedialog.askopenfilename(
+            title="Select an IR file (e.g. MyProfile_44_left.wav)",
+            filetypes=[("WAV", "*.wav"), ("All", "*.*")])
+        if f:
+            try:
+                base = import_stereo_ir_pair(f, self.stereo_ir_dir)
+                if base:
+                    self.refresh_stereo_ir()
+                    self.stereo_ir_pair.set(base)
+                    messagebox.showinfo("Imported", f"Imported stereo IR pair: {base}")
+                else:
+                    messagebox.showerror("Error", "No matching _44/_48 L/R IR files found")
+            except Exception as e:
+                messagebox.showerror("Error", str(e))
+    
+    def export_stereo_ir(self):
+        if not export_stereo_irs:
+            messagebox.showerror("Error", "foobar_convolver module not found"); return
+        method = METHOD_PRESETS.get(self.method.get(), "enhanced")
+        if method in ("atmos_ir", "stereo_conv"):
+            messagebox.showwarning(
+                "Not Available",
+                "Select a processing method first (Standard / Enhanced / Spatial / HRTF / Custom)")
+            return
+        name = simpledialog.askstring("Export IR Files", "Profile name (e.g. MyProfile):", parent=self.root)
+        if not name:
+            return
+        try:
+            chain = self.get_current_filter()
+            created = export_stereo_irs(chain, name, self.stereo_ir_dir)
+            if created:
+                base = sanitize_ir_name(name) if sanitize_ir_name else name
+                self.refresh_stereo_ir()
+                self.stereo_ir_pair.set(base)
+                detail = "\n".join(os.path.basename(p) for p in created[:2])
+                messagebox.showinfo(
+                    "IR Files Exported",
+                    f"Created {len(created)} IR files in:\n{self.stereo_ir_dir}\n\n"
+                    f"{detail} ...\n\nYou can also use these in foobar2000's Stereo Convolver.")
+            else:
+                messagebox.showerror("Error", "IR export failed - see console output")
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+    
     # === IR Profiles ===
     def get_ir_profiles(self):
         if self.convolver:
@@ -486,7 +596,7 @@ class AtmosConverterGUI:
     def on_method_change(self, e=None):
         if self.method.get() == "Custom Speaker Layout":
             self.notebook.select(1)
-        elif self.method.get() == "Atmos IR Convolution":
+        elif self.method.get() in ("Atmos IR Convolution", "Stereo Convolver (IR)"):
             self.notebook.select(2)
     
     def apply_preset(self, name):
@@ -543,6 +653,20 @@ class AtmosConverterGUI:
             layout = self.speaker_layout.get()
             return self.convolver.apply_convolution(input_file, output_file, layout, 48000, profile)
         
+        # Stereo Convolver IR mode (44/48 kHz L/R impulse responses)
+        if method == "stereo_conv":
+            if not apply_stereo_convolution or not resolve_stereo_ir_pair:
+                return False
+            base = self.stereo_ir_pair.get()
+            if not base:
+                return False
+            pairs = resolve_stereo_ir_pair(base, self.stereo_ir_dir)
+            if not pairs:
+                return False
+            codec_args = self.get_codec_args()
+            return apply_stereo_convolution(input_file, output_file, pairs, 48000,
+                                            codec_args, ["-movflags", "+faststart"])
+        
         filter_str = self.get_current_filter()
         channels = get_channel_count(input_file)
         codec_args = self.get_codec_args()
@@ -567,6 +691,10 @@ class AtmosConverterGUI:
         out = self.output_dir.get()
         if not out or not os.path.isdir(out):
             messagebox.showwarning("Invalid Output", "Select output directory"); return
+        method = METHOD_PRESETS.get(self.method.get(), "enhanced")
+        if method == "stereo_conv" and not self.stereo_ir_pair.get():
+            messagebox.showwarning("No IR Pair", "Select an IR pair in the Atmos IR tab (or export one first)")
+            return
         self.is_converting = True; self.cancel_flag = False
         self.convert_btn.config(state=tk.DISABLED); self.cancel_btn.config(state=tk.NORMAL)
         self.progress_var.set(0)
@@ -632,6 +760,11 @@ class AtmosConverterGUI:
         if self.is_converting:
             if not messagebox.askyesno("Cancel?", "Conversion running. Exit?"): return
             self.cancel_conversion()
+        if getattr(self, 'visualizer_panel', None):
+            try:
+                self.visualizer_panel.stop_all()
+            except Exception:
+                pass
         self.save_settings(); self.root.destroy()
 
 

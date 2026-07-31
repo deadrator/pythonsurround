@@ -9,8 +9,10 @@ Convert Dolby 5.1/7.1 surround sound to binaural stereo for TWS earbuds and head
 - **3D Head Model Import** - Generate SOFA files from STL/OBJ head scans
 - **HeSuVi Integration** - Import/export HeSuVi headphone virtualization profiles
 - **Foobar Audio Convolver** - Use Atmos 48kHz/44.1kHz impulse response files
+- **Stereo Convolver IR Workflow** - Export 44/48kHz L/R impulse responses or convert with Equalizer APO / HeSuVi exports (foobar2000 style)
 - **Virtual Speaker Shifter** - Drag speakers to adjust positions with distance-based volume
 - **Volume Visualizer** - Real-time VU meters and waveform display
+- **Channel Visualizer** - Play any file and watch 5.1/7.1/Atmos per-channel levels (GUI tab + TUI CLI), or capture live system audio
 - **Multi-Codec Support** - AAC, MP3, FLAC, Opus, Vorbis, WAV
 - **Multi-Container Support** - M4A, MP4, MKV, OGG, WebM, FLAC
 - **Batch Processing** - Convert multiple files at once
@@ -44,6 +46,34 @@ chmod +x build_appimage.sh
 ```bash
 python gui_app.py
 ```
+
+## 📊 Channel Visualizer
+
+Visualize per-channel audio levels (5.1 / 7.1 / Atmos / any layout) for any
+file FFmpeg can decode (M4A, MP4, MKV, FLAC, WAV, OGG, ...), or capture and
+visualize live system playback.
+
+### GUI
+Open the **Visualizer** tab in the main app, click "Open Audio", pick a song,
+then Play/Pause/Seek while watching the per-channel VU meters and waveforms.
+
+### TUI / CLI
+```bash
+# Live per-channel visualization (playhead follows the song)
+python visualize_audio.py song.m4a
+
+# Static ASCII level chart (great for scripting)
+python visualize_audio.py song.flac --snapshot
+
+# Accelerated scanning
+python visualize_audio.py song.mkv --speed 10
+
+# Live system playback capture (needs sounddevice)
+python visualize_audio.py --system
+```
+
+System capture uses the optional `sounddevice` package:
+`pip install sounddevice` (WASAPI loopback on Windows, PulseAudio monitor on Linux).
 
 ### Command Line
 ```bash
@@ -112,6 +142,35 @@ audio-atmos-converter/
 ├── requirements.txt        # Python dependencies
 └── impulse_responses/      # Atmos IR files directory
 ```
+
+## 🎯 Stereo Convolver IR Workflow (Equalizer APO / HeSuVi style)
+
+Instead of applying filter chains to every file, you can capture your processing
+once as **impulse responses** and then apply it with fast convolution:
+
+1. **Export IR files** (GUI: Atmos IR tab → "Export IR Files", or CLI):
+   ```bash
+   python convert_atmos.py --export-ir MyProfile --method spatial
+   ```
+   This runs a stereo dirac delta through the selected processing and creates
+   four files in `impulse_responses/stereo/`:
+   ```
+   MyProfile_44_left.wav   MyProfile_44_right.wav
+   MyProfile_48_left.wav   MyProfile_48_right.wav
+   ```
+   These contain all of the processing for stereo content and work with
+   foobar2000's **Stereo Convolver** component (`foo_dsp_stereoconv.dll`).
+
+2. **Convert with IR pairs** (GUI: "Stereo Convolver (IR)" method, or CLI):
+   ```bash
+   python convert_atmos.py input.m4a --convolve MyProfile
+   ```
+   The 44 kHz pair is used for 44.1 kHz content, the 48 kHz pair otherwise
+   (audio is resampled to match). 5.1/7.1 input is downmixed to stereo first.
+
+You can also import IR pairs exported from **HeSuVi/Equalizer APO** (the
+`*_44_left/right.wav`, `*_48_left/right.wav` benchmark files) via the GUI
+"Import Pair" button, or place them in `impulse_responses/stereo/`.
 
 ## 🎚️ Supported Formats
 
