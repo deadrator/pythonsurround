@@ -200,8 +200,7 @@ fun PlayerScreen() {
         )
         Text(
             "${fmtTime(positionMs)} / ${fmtTime(durationMs)}",
-            style = Type.Data,
-            color = Palette.Muted
+            style = Type.Data
         )
 
         // Preview conversion toggle
