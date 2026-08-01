@@ -60,6 +60,23 @@ fun PlayerScreen() {
 
     val player = remember { MediaPlayer() }
     DisposableEffect(Unit) {
+        // Without these, a runtime decode failure (or a finished track) leaves
+        // `playing` true forever: the playhead poll loop then calls
+        // player.duration on an ERROR-state player and spams logcat with
+        // "Attempt to call getDuration in wrong state" (-38) every 200ms while
+        // the UI is frozen at 0:00. Observed on-device with E-AC-3-in-M4A where
+        // prepare() succeeds (licensed MIUI decoder) but playback fails later.
+        player.setOnErrorListener { mp, what, extra ->
+            Log.e("AtmosConverter", "MediaPlayer error $what/$extra")
+            playing = false
+            positionMs = 0L
+            mp.reset() // valid from any state, incl. ERROR
+            true
+        }
+        player.setOnCompletionListener {
+            playing = false
+            positionMs = 0L
+        }
         onDispose {
             player.release()
             previewFile?.delete()
@@ -73,14 +90,16 @@ fun PlayerScreen() {
                 playlist.addAll(newEntries)
                 if (currentIndex == -1) {
                     currentIndex = 0
-                    val res = loadTrack(context, player, playlist, 0, previewOn, previewFile) { _, _, _ -> }
+                    // Probe first: the codec decides whether the platform player is
+                    // even worth trying (licensed surround codecs must go straight
+                    // to the FFmpeg transcode fallback).
+                    meta = AudioProbe.probe(FfmpegEngine.copyToCache(context, uris[0], "probe"))
+                    val res = loadTrack(context, player, playlist, 0, previewOn, previewFile, meta?.codecName) { _, _, _ -> }
                     previewFile = res.file
                     if (res.loaded) {
                         player.start()
                         playing = true
                     }
-                    // metadata shown via update loop below
-                    meta = AudioProbe.probe(FfmpegEngine.copyToCache(context, uris[0], "probe"))
                 }
             }
         }
@@ -100,9 +119,13 @@ fun PlayerScreen() {
     fun playIndex(i: Int) {
         if (i !in playlist.indices) return
         currentIndex = i
+        // Stop polling before loadTrack resets the player: otherwise the poll
+        // loop would read player.duration on an IDLE player and spam -38
+        // getDuration errors during every track switch (same bug class).
+        playing = false
         scope.launch {
             meta = AudioProbe.probe(FfmpegEngine.copyToCache(context, playlist[i].uri, "probe"))
-            val res = loadTrack(context, player, playlist, i, previewOn, previewFile) { _, _, _ -> }
+            val res = loadTrack(context, player, playlist, i, previewOn, previewFile, meta?.codecName) { _, _, _ -> }
             previewFile = res.file
             if (res.loaded) {
                 player.start()
@@ -171,7 +194,16 @@ fun PlayerScreen() {
                 Icon(Icons.Filled.SkipPrevious, contentDescription = "Prev")
             }
             IconButton(onClick = {
-                if (playing) { player.pause(); playing = false } else { player.start(); playing = true }
+                if (playing) { player.pause(); playing = false }
+                else {
+                    try {
+                        player.start()
+                        playing = true
+                    } catch (e: Exception) {
+                        // Player was reset after an async error - reload the track.
+                        playIndex(currentIndex)
+                    }
+                }
             }, enabled = currentIndex in playlist.indices) {
                 Icon(
                     if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
@@ -208,8 +240,11 @@ fun PlayerScreen() {
             Switch(checked = previewOn, onCheckedChange = { v ->
                 previewOn = v
                 if (currentIndex in playlist.indices) {
+                    // Stop the poll loop before loadTrack resets the player
+                    // (same -38-avoidance as playIndex).
+                    playing = false
                     scope.launch {
-                        val res = loadTrack(context, player, playlist, currentIndex, v, previewFile) { _, _, _ -> }
+                        val res = loadTrack(context, player, playlist, currentIndex, v, previewFile, meta?.codecName) { _, _, _ -> }
                         previewFile = res.file
                         if (res.loaded) {
                             player.start()
@@ -302,10 +337,13 @@ private fun channelColor(ch: Int, total: Int): Color = when {
 }
 
 /** Loads a track into the player. If preview is on, routes through FFmpeg first.
- *  If the platform MediaPlayer can't decode the file (AC3/E-AC3/DTS/TrueHD/AC-4
- *  are not supported by stock Android - `prepare()` throws IOException), it
- *  transcodes the track to AAC via FFmpeg and plays that instead. Never throws:
- *  failures surface as a Toast and LoadResult.loaded=false. */
+ *  Licensed surround codecs (AC3/E-AC3/DTS/TrueHD/AC-4) are never sent to the
+ *  platform MediaPlayer: stock Android lacks decoders (prepare() throws), but
+ *  some OEM devices (e.g. MIUI with licensed Dolby decoders) ACCEPT prepare()
+ *  and then fail asynchronously during playback, wedging the UI (observed
+ *  on-device: E-AC-3-in-M4A -> MediaPlayer error -38 in a tight loop). So the
+ *  probed `codecName` short-circuits straight to the FFmpeg transcode to AAC.
+ *  Never throws: failures surface as a Toast and LoadResult.loaded=false. */
 private suspend fun loadTrack(
     context: Context,
     player: MediaPlayer,
@@ -313,6 +351,7 @@ private suspend fun loadTrack(
     index: Int,
     previewOn: Boolean,
     previewFile: File?,
+    codecName: String?,
     onMeta: (Long, Long, AudioMeta?) -> Unit
 ): LoadResult {
     val entry = playlist[index]
@@ -339,15 +378,22 @@ private suspend fun loadTrack(
         }
     }
 
-    // Plain playback: try the platform decoder first (AAC/MP3/FLAC/Opus/WAV...).
-    try {
-        player.reset()
-        player.setDataSource(context, entry.uri)
-        player.prepare()
-        previewFile?.delete() // drop any stale decoded fallback file from a previous track
-        return LoadResult(null, true)
-    } catch (e: Exception) {
-        Log.w("AtmosConverter", "MediaPlayer cannot decode ${entry.name}: ${e.message}; falling back to FFmpeg")
+    // Licensed surround codecs: skip the platform decoder entirely (see KDoc).
+    val needsFfmpeg = codecName?.lowercase() in
+        setOf("ac3", "eac3", "dca", "dts", "truehd", "ac4")
+    if (!needsFfmpeg) {
+        // Plain playback: try the platform decoder first (AAC/MP3/FLAC/Opus/WAV...).
+        try {
+            player.reset()
+            player.setDataSource(context, entry.uri)
+            player.prepare()
+            previewFile?.delete() // drop any stale decoded fallback file from a previous track
+            return LoadResult(null, true)
+        } catch (e: Exception) {
+            Log.w("AtmosConverter", "MediaPlayer cannot decode ${entry.name}: ${e.message}; falling back to FFmpeg")
+        }
+    } else {
+        Log.w("AtmosConverter", "Codec $codecName needs FFmpeg decode; transcoding ${entry.name}")
     }
 
     // FFmpeg fallback: transcode to AAC (playable by any device) and play that.
@@ -355,9 +401,14 @@ private suspend fun loadTrack(
     try {
         val cached = FfmpegEngine.copyToCache(context, entry.uri, entry.name)
         val out = File(context.cacheDir, "decoded_${System.currentTimeMillis()}.m4a")
+        // -vn: this M4A carries an embedded cover-art video stream; without it
+        // FFmpeg maps + re-encodes it (h264_mediacodec fails to configure on
+        // many devices) and the whole transcode dies with a 0-byte output
+        // (observed on-device: E-AC-3-in-M4A -> "Conversion failed!").
         val ok = FfmpegEngine(context).execute(
             listOf(
                 "-i", cached.absolutePath,
+                "-vn",
                 "-c:a", "aac", "-b:a", "256k", "-ar", "48000",
                 "-f", "ipod", "-y", out.absolutePath
             )

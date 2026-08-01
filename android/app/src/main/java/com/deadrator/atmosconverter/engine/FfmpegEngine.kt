@@ -104,7 +104,11 @@ class FfmpegEngine(private val context: Context) {
         val duration = meta?.durationSeconds
 
         if (method in FilterPresets.PASSTHROUGH_METHODS) {
-            val args = listOf("-i", input.absolutePath, "-c:a", "copy", "-map_metadata", "0") +
+            // -vn: audio-only output. Without it, M4A/MOV inputs with embedded
+            // cover-art video streams get mapped and re-encoded (defaulting to
+            // h264_mediacodec, which fails to configure on many devices),
+            // failing the whole conversion with a 0-byte output.
+            val args = listOf("-i", input.absolutePath, "-vn", "-c:a", "copy", "-map_metadata", "0") +
                 CodecRegistry.outputArgs(container) + listOf("-y", output.absolutePath)
             return@withContext execute(args, duration, onProgress)
         }
@@ -115,10 +119,11 @@ class FfmpegEngine(private val context: Context) {
         val applyFilter = channels > 2 || method in FilterPresets.UPMIX_METHODS
 
         val args = if (applyFilter) {
-            listOf("-i", input.absolutePath, "-af", chain) + encodeArgs + outArgs +
+            // -vn drops cover-art/video streams (see passthrough comment above).
+            listOf("-i", input.absolutePath, "-vn", "-af", chain) + encodeArgs + outArgs +
                 listOf("-y", output.absolutePath)
         } else {
-            listOf("-i", input.absolutePath) + encodeArgs + outArgs +
+            listOf("-i", input.absolutePath, "-vn") + encodeArgs + outArgs +
                 listOf("-y", output.absolutePath)
         }
         execute(args, duration, onProgress)
