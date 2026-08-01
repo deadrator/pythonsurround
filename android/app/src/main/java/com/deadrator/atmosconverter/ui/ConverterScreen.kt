@@ -29,7 +29,6 @@ import com.deadrator.atmosconverter.dsp.CodecRegistry
 import com.deadrator.atmosconverter.dsp.FilterPresets
 import com.deadrator.atmosconverter.dsp.SpeakerConfig
 import com.deadrator.atmosconverter.engine.FfmpegEngine
-import com.deadrator.atmosconverter.ui.theme.Palette
 import com.deadrator.atmosconverter.ui.theme.Panel
 import com.deadrator.atmosconverter.ui.theme.Type
 import kotlinx.coroutines.launch

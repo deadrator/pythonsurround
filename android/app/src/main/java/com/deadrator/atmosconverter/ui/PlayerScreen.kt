@@ -159,8 +159,7 @@ fun PlayerScreen() {
                             "${it.sampleRate / 1000}.${(it.sampleRate % 1000).toString().padStart(3, '0')} kHz • " +
                             (it.codecName ?: "?") + (it.codecLongName?.let { " ($it)" } ?: "") +
                             (it.bitRateKbps?.let { " • ${it} kbps" } ?: ""),
-                        style = Type.Data,
-                        color = Palette.Muted
+                        style = Type.Data
                     )
                 }
             }

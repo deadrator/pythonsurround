@@ -1,7 +1,6 @@
 package com.deadrator.atmosconverter.ui.theme
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -89,7 +88,7 @@ fun Panel(
         border = BorderStroke(1.dp, Palette.Border),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Box(modifier = Modifier) { content() }
+        content()
     }
 }
 
