@@ -261,13 +261,15 @@ fun SpeakerRingCanvas(
                 strokeWidth = 1.5f,
                 pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f))
             )
-            val color = when {
+            // Note: named `dotColor` (not `color`) so the Paint().apply { color = ... }
+            // blocks below can't be confused with this outer val during name resolution.
+            val dotColor = when {
                 label.startsWith("F") -> Palette.Front
                 label.startsWith("B") -> Palette.Rear
                 else -> Palette.Side
             }
             val dotR = (9 + vol * 7).toFloat()
-            drawCircle(color = color, radius = dotR, center = Offset(x, y))
+            drawCircle(color = dotColor, radius = dotR, center = Offset(x, y))
             drawCircle(color = Color.White, radius = dotR, center = Offset(x, y), style = Stroke(width = 2f))
 
             drawContext.canvas.nativeCanvas.drawText(

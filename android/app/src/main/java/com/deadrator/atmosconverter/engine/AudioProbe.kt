@@ -22,29 +22,45 @@ data class AudioMeta(
 )
 
 /**
- * Wraps FFprobeKit to fetch the same info the desktop app probes
- * (channel count, codec, sample rate, duration, bitrate).
+ * Wraps FFprobeKit (the maintained `dev.ffmpegkit-maintained` fork) to fetch
+ * the same info the desktop app probes (channel count, codec, sample rate,
+ * duration, bitrate).
+ *
+ * NOTE: the maintained fork's API differs from the retired `com.arthenica`
+ * artifact, which this file was originally written against:
+ *  - stream getters are getCodec()/getCodecLong()/getType()/getBitrate()
+ *    (there is no getCodecName()/getCodecLongName()/getCodecType()/getBitRate());
+ *  - tags are an org.json.JSONObject, not a Map;
+ *  - arbitrary stream fields are read via getStringProperty()/getNumberProperty();
+ *  - there is no getMediaInformation(path, callback) overload - use the
+ *    async variant, whose callback receives a MediaInformationSession.
  */
 object AudioProbe {
 
     suspend fun probe(file: File): AudioMeta? = withContext(Dispatchers.IO) {
         suspendCancellableCoroutine { cont ->
-            FFprobeKit.getMediaInformation(file.absolutePath) { info ->
-                val meta = extract(file, info)
+            // getMediaInformationAsync returns the session immediately; the
+            // callback fires when the probe finishes. Cancel the probe if the
+            // calling coroutine is cancelled (same pattern as FfmpegEngine).
+            val probeSession = FFprobeKit.getMediaInformationAsync(file.absolutePath) { session ->
+                val meta = extract(session?.mediaInformation)
                 if (cont.isActive) cont.resume(meta)
             }
+            cont.invokeOnCancellation { probeSession.cancel() }
         }
     }
 
-    private fun extract(file: File, info: MediaInformation?): AudioMeta? {
+    private fun extract(info: MediaInformation?): AudioMeta? {
         if (info == null) return null
-        val streams = info.streams?.filter { it.isAudio() } ?: emptyList()
-        val stream = streams.firstOrNull() ?: return null
+        val stream = info.streams
+            ?.filterIsInstance<StreamInformation>()
+            ?.firstOrNull { it.type == "audio" }
+            ?: return null
         return AudioMeta(
-            codecName = stream.codecName,
-            codecLongName = stream.codecLongName,
-            profile = stream.profile,
-            channels = stream.channels ?: 0,
+            codecName = stream.codec,
+            codecLongName = stream.codecLong,
+            profile = stream.getStringProperty("profile"),
+            channels = stream.getNumberProperty("channels")?.toInt() ?: 0,
             channelLayout = stream.channelLayout,
             sampleRate = parseSampleRate(stream),
             durationSeconds = parseDuration(info, stream),
@@ -52,20 +68,26 @@ object AudioProbe {
         )
     }
 
-    private fun StreamInformation.isAudio(): Boolean =
-        codecType == "audio"
-
     private fun parseSampleRate(s: StreamInformation): Int =
         s.sampleRate?.toIntOrNull()
-            ?: s.tags?.get("sample_rate")?.toIntOrNull()
+            ?: s.getStringProperty("sample_rate")?.toIntOrNull()
             ?: 48000
 
     /** MediaInformation.getDuration() is a String (seconds); fall back to the
-     *  stream's tags (e.g. "DURATION-eng") or 0. */
+     *  stream's DURATION-* tags (e.g. "DURATION-eng": "00:04:12.34") or 0. */
     private fun parseDuration(info: MediaInformation, s: StreamInformation): Double {
         info.duration?.toDoubleOrNull()?.let { return it }
-        (s.tags?.values?.firstOrNull { it.startsWith("00:") })
-            ?.let { return ffmpegTimeToSeconds(it) }
+        val tags = info.tags ?: s.tags
+        if (tags != null) {
+            val keys = tags.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                if (key.startsWith("DURATION")) {
+                    val secs = ffmpegTimeToSeconds(tags.optString(key))
+                    if (secs > 0.0) return secs
+                }
+            }
+        }
         return 0.0
     }
 
@@ -79,6 +101,6 @@ object AudioProbe {
     }
 
     private fun parseBitrate(s: StreamInformation): Int? =
-        s.bitRate?.toIntOrNull()?.let { it / 1000 }
-            ?: s.tags?.get("bit_rate")?.toIntOrNull()?.let { it / 1000 }
+        s.bitrate?.toIntOrNull()?.let { it / 1000 }
+            ?: s.getStringProperty("bit_rate")?.toIntOrNull()?.let { it / 1000 }
 }
