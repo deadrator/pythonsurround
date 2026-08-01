@@ -22,6 +22,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import com.deadrator.atmosconverter.engine.FfmpegEngine
 import com.deadrator.atmosconverter.ui.theme.Palette
@@ -61,40 +62,48 @@ fun VisualizerScreen() {
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            fileName = uri.lastPathSegment?.substringAfterLast('/')
             scope.launch {
-                val f = FfmpegEngine.copyToCache(context, uri, "viz")
-                val meta = com.deadrator.atmosconverter.engine.AudioProbe.probe(f)
-                val ch = meta?.channels?.coerceAtLeast(1) ?: 2
-                channels = ch
-                labels = standardLabels(ch)
-                // decode full file to mono/float for levels + waveform buckets
-                withContext(Dispatchers.IO) {
-                    val out = File(context.cacheDir, "viz_${System.currentTimeMillis()}.f32le")
-                    val ok = engine.execute(
-                        listOf("-i", f.absolutePath, "-f", "f32le", "-ac", "1", "-y", out.absolutePath)
-                    ) {}
-                    if (ok) {
-                        val bytes = out.readBytes()
-                        val floats = FloatArray(bytes.size / 4)
-                        java.nio.ByteBuffer.wrap(bytes).asFloatBuffer().get(floats)
-                        out.delete()
-                        peaks = bucketPeaks(floats, 64)
+                try {
+                    fileName = uri.lastPathSegment?.substringAfterLast('/')
+                    val f = FfmpegEngine.copyToCache(context, uri, "viz")
+                    val meta = com.deadrator.atmosconverter.engine.AudioProbe.probe(f)
+                    val ch = meta?.channels?.coerceAtLeast(1) ?: 2
+                    channels = ch
+                    labels = standardLabels(ch)
+                    // Decode the first 60s to mono/float for levels + waveform
+                    // buckets. -t caps the decode: a full album-length 5.1 decode
+                    // (~1.15 MB/s per channel of f32le) would OOM readBytes()
+                    // and crash - which is what happened with AC3 files here.
+                    withContext(Dispatchers.IO) {
+                        val out = File(context.cacheDir, "viz_${System.currentTimeMillis()}.f32le")
+                        val ok = engine.execute(
+                            listOf("-i", f.absolutePath, "-t", "60", "-f", "f32le", "-ac", "1", "-y", out.absolutePath)
+                        ) {}
+                        if (ok) {
+                            val bytes = out.readBytes()
+                            val floats = FloatArray(bytes.size / 4)
+                            java.nio.ByteBuffer.wrap(bytes).asFloatBuffer().get(floats)
+                            out.delete()
+                            peaks = bucketPeaks(floats, 64)
+                        }
                     }
-                }
-                // per-channel RMS (decode multichannel float)
-                withContext(Dispatchers.IO) {
-                    val out2 = File(context.cacheDir, "vizch_${System.currentTimeMillis()}.f32le")
-                    val ok2 = engine.execute(
-                        listOf("-i", f.absolutePath, "-f", "f32le", "-ac", ch.toString(), "-y", out2.absolutePath)
-                    ) {}
-                    if (ok2) {
-                        val bytes = out2.readBytes()
-                        val floats = FloatArray(bytes.size / 4)
-                        java.nio.ByteBuffer.wrap(bytes).asFloatBuffer().get(floats)
-                        out2.delete()
-                        levels = channelRms(floats, ch)
+                    // per-channel RMS (decode multichannel float, capped)
+                    withContext(Dispatchers.IO) {
+                        val out2 = File(context.cacheDir, "vizch_${System.currentTimeMillis()}.f32le")
+                        val ok2 = engine.execute(
+                            listOf("-i", f.absolutePath, "-t", "60", "-f", "f32le", "-ac", ch.toString(), "-y", out2.absolutePath)
+                        ) {}
+                        if (ok2) {
+                            val bytes = out2.readBytes()
+                            val floats = FloatArray(bytes.size / 4)
+                            java.nio.ByteBuffer.wrap(bytes).asFloatBuffer().get(floats)
+                            out2.delete()
+                            levels = channelRms(floats, ch)
+                        }
                     }
+                } catch (e: Exception) {
+                    // copyToCache can throw, probe can fail; never crash the app.
+                    Toast.makeText(context, "✗ Cannot analyze: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
         }

@@ -49,17 +49,28 @@ fun SpeakerShifterScreen(
 ) {
     var presetName by remember { mutableStateOf<String?>(null) }
     var filterPreview by remember { mutableStateOf<String?>(null) }
+    // Monotonic counter bumped on every config mutation. MutableState skips
+    // notification when the new value equals the old one, and the generated
+    // filter string can stay identical for small adjustments (gains are
+    // %.3f-rounded), which would freeze the canvas dots and slider thumbs.
+    // Reading `revision` in the body subscribes the screen to it, so any
+    // config change always forces a recomposition regardless of string equality.
+    var revision by remember { mutableIntStateOf(0) }
 
     fun refreshPreview() {
+        revision++
         filterPreview = SpeakerFilterGenerator.generateBinauralFilter(config)
     }
     LaunchedEffect(layout) { refreshPreview() }
 
     // Applying a preset that switches the layout must happen AFTER the new
     // SpeakerConfig is created (layout drives config identity). So we stash
-    // the preset and apply it once the layout recomposition has run.
+    // the preset and apply it once the layout recomposition has run. Keyed on
+    // BOTH layout and pendingPreset: a same-layout preset (e.g. "Wide 5.1"
+    // while already in 5.1) never changed `layout`, so keying on layout alone
+    // left the preset stashed forever.
     var pendingPreset by remember { mutableStateOf<Map<String, Double>?>(null) }
-    LaunchedEffect(layout) {
+    LaunchedEffect(layout, pendingPreset) {
         pendingPreset?.let { pos ->
             config.reset()
             pos.forEach { (l, a) -> config.setPosition(l, a) }
@@ -75,6 +86,10 @@ fun SpeakerShifterScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // Subscription to `revision`: keeps this screen in sync with the shared
+        // SpeakerConfig even when the generated filter string is unchanged.
+        @Suppress("UNUSED_EXPRESSION")
+        revision
         Text("🔊 Virtual Speaker Shifter", style = MaterialTheme.typography.headlineSmall)
         Text(
             "Drag speakers around the ring to rotate them; drag toward the center (NEAR) or the edge (FAR) - volume follows distance",

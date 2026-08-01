@@ -3,6 +3,7 @@ package com.deadrator.atmosconverter.ui
 import android.content.Context
 import android.media.MediaPlayer
 import android.net.Uri
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -70,7 +71,12 @@ fun PlayerScreen() {
                 playlist.addAll(newEntries)
                 if (currentIndex == -1) {
                     currentIndex = 0
-                    previewFile = loadTrack(context, player, playlist, 0, previewOn, previewFile) { pos, dur, m -> }
+                    val res = loadTrack(context, player, playlist, 0, previewOn, previewFile) { _, _, _ -> }
+                    previewFile = res.file
+                    if (res.loaded) {
+                        player.start()
+                        playing = true
+                    }
                     // metadata shown via update loop below
                     meta = AudioProbe.probe(FfmpegEngine.copyToCache(context, uris[0], "probe"))
                 }
@@ -94,9 +100,12 @@ fun PlayerScreen() {
         currentIndex = i
         scope.launch {
             meta = AudioProbe.probe(FfmpegEngine.copyToCache(context, playlist[i].uri, "probe"))
-            previewFile = loadTrack(context, player, playlist, i, previewOn, previewFile) { pos, dur, m -> }
-            player.start()
-            playing = true
+            val res = loadTrack(context, player, playlist, i, previewOn, previewFile) { _, _, _ -> }
+            previewFile = res.file
+            if (res.loaded) {
+                player.start()
+                playing = true
+            }
         }
     }
 
@@ -194,9 +203,12 @@ fun PlayerScreen() {
                 previewOn = v
                 if (currentIndex in playlist.indices) {
                     scope.launch {
-                        previewFile = loadTrack(context, player, playlist, currentIndex, v, previewFile) { pos, dur, m -> }
-                        player.start()
-                        playing = true
+                        val res = loadTrack(context, player, playlist, currentIndex, v, previewFile) { _, _, _ -> }
+                        previewFile = res.file
+                        if (res.loaded) {
+                            player.start()
+                            playing = true
+                        }
                     }
                 }
             })
@@ -224,8 +236,8 @@ fun PlayerScreen() {
                             )
                         }
                     }
-                    // decode a block of PCM to drive meters + waveform
-                    LaunchedEffect(playlist.getOrNull(currentIndex)?.uri, currentIndex, playing) {
+                    // decode a block of PCM to drive meters (decoded once per track, not per play/pause)
+                    LaunchedEffect(playlist.getOrNull(currentIndex)?.uri, currentIndex) {
                         val entry = playlist.getOrNull(currentIndex) ?: return@LaunchedEffect
                         val decoded = FfmpegEngine.copyToCache(context, entry.uri, "decode")
                         withContext(Dispatchers.IO) {
@@ -272,6 +284,10 @@ fun PlayerScreen() {
 
 private data class PlaylistEntry(val uri: Uri, val name: String)
 
+/** Result of loadTrack: the fallback file to keep for cleanup (or null when
+ *  playing the original) and whether a track is actually loaded/playable. */
+private data class LoadResult(val file: File?, val loaded: Boolean)
+
 private fun channelColor(ch: Int, total: Int): Color = when {
     ch == 0 || (total > 2 && ch == 1) -> Palette.Front
     total <= 2 -> Palette.Front
@@ -279,8 +295,11 @@ private fun channelColor(ch: Int, total: Int): Color = when {
     else -> Palette.Side
 }
 
-/** Loads a track into the player; if preview is on, routes through FFmpeg first.
- *  Returns the preview file created (or null when playing the original). */
+/** Loads a track into the player. If preview is on, routes through FFmpeg first.
+ *  If the platform MediaPlayer can't decode the file (AC3/E-AC3/DTS/TrueHD/AC-4
+ *  are not supported by stock Android - `prepare()` throws IOException), it
+ *  transcodes the track to AAC via FFmpeg and plays that instead. Never throws:
+ *  failures surface as a Toast and LoadResult.loaded=false. */
 private suspend fun loadTrack(
     context: Context,
     player: MediaPlayer,
@@ -289,13 +308,14 @@ private suspend fun loadTrack(
     previewOn: Boolean,
     previewFile: File?,
     onMeta: (Long, Long, AudioMeta?) -> Unit
-): File? {
+): LoadResult {
     val entry = playlist[index]
+
     if (previewOn) {
         // decode to a temp WAV through the enhanced chain (stand-in for full preview)
-        val cached = FfmpegEngine.copyToCache(context, entry.uri, entry.name)
-        val out = File(context.cacheDir, "preview_${System.currentTimeMillis()}.wav")
         try {
+            val cached = FfmpegEngine.copyToCache(context, entry.uri, entry.name)
+            val out = File(context.cacheDir, "preview_${System.currentTimeMillis()}.wav")
             val ok = FfmpegEngine(context).convert(
                 cached, out,
                 com.deadrator.atmosconverter.dsp.FilterPresets.Method.ENHANCED,
@@ -306,16 +326,48 @@ private suspend fun loadTrack(
                 player.setDataSource(out.absolutePath)
                 player.prepare()
                 previewFile?.delete()
-                return out
+                return LoadResult(out, true)
             }
         } catch (e: Exception) {
             Toast.makeText(context, "Preview failed: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
-    player.reset()
-    player.setDataSource(context, entry.uri)
-    player.prepare()
-    return null
+
+    // Plain playback: try the platform decoder first (AAC/MP3/FLAC/Opus/WAV...).
+    try {
+        player.reset()
+        player.setDataSource(context, entry.uri)
+        player.prepare()
+        previewFile?.delete() // drop any stale decoded fallback file from a previous track
+        return LoadResult(null, true)
+    } catch (e: Exception) {
+        Log.w("AtmosConverter", "MediaPlayer cannot decode ${entry.name}: ${e.message}; falling back to FFmpeg")
+    }
+
+    // FFmpeg fallback: transcode to AAC (playable by any device) and play that.
+    Toast.makeText(context, "Decoding ${entry.name} via FFmpeg…", Toast.LENGTH_SHORT).show()
+    try {
+        val cached = FfmpegEngine.copyToCache(context, entry.uri, entry.name)
+        val out = File(context.cacheDir, "decoded_${System.currentTimeMillis()}.m4a")
+        val ok = FfmpegEngine(context).execute(
+            listOf(
+                "-i", cached.absolutePath,
+                "-c:a", "aac", "-b:a", "256k", "-ar", "48000",
+                "-f", "ipod", "-y", out.absolutePath
+            )
+        ) {}
+        if (ok) {
+            player.reset()
+            player.setDataSource(out.absolutePath)
+            player.prepare()
+            previewFile?.delete()
+            return LoadResult(out, true)
+        }
+    } catch (e: Exception) {
+        Log.e("AtmosConverter", "FFmpeg decode fallback failed: ${e.message}")
+    }
+    Toast.makeText(context, "Cannot play ${entry.name}: no decoder available", Toast.LENGTH_LONG).show()
+    return LoadResult(null, false)
 }
 
 private fun fmtTime(ms: Long): String {
@@ -346,7 +398,9 @@ private suspend fun computeChannelLevels(context: Context, file: File, channels:
         val out = File(context.cacheDir, "levels_${System.currentTimeMillis()}.f32le")
         try {
             FfmpegEngine(context).execute(
-                listOf("-i", file.absolutePath, "-f", "f32le", "-ac", channels.toString(), "-y", out.absolutePath)
+                // -t 60 caps the decoded sample (a full album-length 5.1 decode
+                // would OOM readBytes(): ~1.15 MB/s per channel).
+                listOf("-i", file.absolutePath, "-t", "60", "-f", "f32le", "-ac", channels.toString(), "-y", out.absolutePath)
             ) {}
             val bytes = out.readBytes()
             val floats = FloatArray(bytes.size / 4)
@@ -374,7 +428,7 @@ private suspend fun computeWaveform(context: Context, file: File, buckets: Int):
         val out = File(context.cacheDir, "wave_${System.currentTimeMillis()}.f32le")
         try {
             FfmpegEngine(context).execute(
-                listOf("-i", file.absolutePath, "-f", "f32le", "-ac", "1", "-y", out.absolutePath)
+                listOf("-i", file.absolutePath, "-t", "60", "-f", "f32le", "-ac", "1", "-y", out.absolutePath)
             ) {}
             val bytes = out.readBytes()
             val floats = FloatArray(bytes.size / 4)
