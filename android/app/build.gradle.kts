@@ -60,6 +60,9 @@ dependencies {
     // Maintained FFmpeg fork (com.arthenica API drop-in), full variant includes
     // libmysofa (sofalizer), libswresample, all audio codecs.
     implementation(libs.ffmpeg.kit)
+    // The fork's POM declares no transitive dependencies; FFmpegKitConfig needs
+    // smart-exception-java at runtime (NoClassDefFoundError without it).
+    implementation(libs.arthenica.smart.exception)
 
     debugImplementation(libs.androidx.ui.tooling)
 }
