@@ -30,6 +30,8 @@ import com.deadrator.atmosconverter.engine.AudioMeta
 import com.deadrator.atmosconverter.engine.AudioProbe
 import com.deadrator.atmosconverter.engine.FfmpegEngine
 import com.deadrator.atmosconverter.ui.theme.Palette
+import com.deadrator.atmosconverter.ui.theme.Panel
+import com.deadrator.atmosconverter.ui.theme.Type
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -115,10 +117,11 @@ fun PlayerScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("🎵 AC3 Music Player", style = MaterialTheme.typography.headlineSmall)
+        Text("PLAYBACK", style = Type.Eyebrow)
+        Text("AC3 Music Player", style = Type.Title)
 
         // Playlist
-        Card(modifier = Modifier.height(160.dp)) {
+        Panel(modifier = Modifier.height(160.dp)) {
             LazyColumn(
                 modifier = Modifier.padding(vertical = 4.dp),
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
@@ -140,11 +143,11 @@ fun PlayerScreen() {
         }
 
         Button(onClick = { picker.launch(arrayOf("audio/*", "video/*", "*/*")) }) {
-            Text("📂 Add Files")
+            Text("Add Files")
         }
 
         // Track info
-        Card {
+        Panel {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
                     playlist.getOrNull(currentIndex)?.name ?: "No track loaded",
@@ -156,8 +159,8 @@ fun PlayerScreen() {
                             "${it.sampleRate / 1000}.${(it.sampleRate % 1000).toString().padStart(3, '0')} kHz • " +
                             (it.codecName ?: "?") + (it.codecLongName?.let { " ($it)" } ?: "") +
                             (it.bitRateKbps?.let { " • ${it} kbps" } ?: ""),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        style = Type.Data,
+                        color = Palette.Muted
                     )
                 }
             }
@@ -189,12 +192,17 @@ fun PlayerScreen() {
                 positionMs = it.toLong()
                 player.seekTo(it.toInt())
             },
-            valueRange = 0f..max(1f, durationMs.toFloat())
+            valueRange = 0f..max(1f, durationMs.toFloat()),
+            colors = SliderDefaults.colors(
+                thumbColor = Palette.Front,
+                activeTrackColor = Palette.Front,
+                inactiveTrackColor = Palette.Border
+            )
         )
         Text(
             "${fmtTime(positionMs)} / ${fmtTime(durationMs)}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            style = Type.Data,
+            color = Palette.Muted
         )
 
         // Preview conversion toggle
@@ -217,14 +225,14 @@ fun PlayerScreen() {
 
         // VU meters (per channel)
         meta?.let { m ->
-            Card {
+            Panel {
                 Column(
                     Modifier
                         .fillMaxWidth()
                         .padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text("Channel Levels (VU)", style = MaterialTheme.typography.titleSmall)
+                    Text("Channel Levels", style = MaterialTheme.typography.titleSmall)
                     // levels are computed at load time from a decoded pass (see loadTrack)
                     var levels by remember { mutableStateOf<List<Float>>(emptyList()) }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -250,7 +258,7 @@ fun PlayerScreen() {
 
         // Waveform
         meta?.let { m ->
-            Card {
+            Panel {
                 Column(Modifier.padding(12.dp)) {
                     Text("Waveform", style = MaterialTheme.typography.titleSmall)
                     var peaks by remember { mutableStateOf<List<Float>>(emptyList()) }
@@ -268,7 +276,7 @@ fun PlayerScreen() {
                         peaks.forEachIndexed { i, p ->
                             val x = i * step
                             drawLine(
-                                color = Palette.Accent,
+                                color = Palette.Front,
                                 start = Offset(x, h / 2 - h / 2 * p),
                                 end = Offset(x, h / 2 + h / 2 * p),
                                 strokeWidth = 2f,

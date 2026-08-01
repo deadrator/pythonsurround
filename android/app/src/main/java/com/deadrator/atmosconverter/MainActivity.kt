@@ -64,7 +64,7 @@ fun AtmosApp() {
     Scaffold(
         containerColor = Palette.Bg,
         bottomBar = {
-            NavigationBar {
+            NavigationBar(containerColor = Palette.Surface) {
                 Tab.entries.forEach { tab ->
                     NavigationBarItem(
                         selected = currentTab == tab.route,
@@ -77,7 +77,14 @@ fun AtmosApp() {
                             }
                         },
                         icon = { Icon(tab.icon, contentDescription = tab.label) },
-                        label = { Text(tab.label) }
+                        label = { Text(tab.label) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = Palette.Accent,
+                            selectedTextColor = Palette.Accent,
+                            indicatorColor = Palette.Accent.copy(alpha = 0.16f),
+                            unselectedIconColor = Palette.Muted,
+                            unselectedTextColor = Palette.Muted
+                        )
                     )
                 }
             }

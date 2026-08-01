@@ -1,5 +1,9 @@
 package com.deadrator.atmosconverter.ui
 
+import android.provider.Settings
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -18,16 +22,17 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.deadrator.atmosconverter.dsp.SpeakerConfig
 import com.deadrator.atmosconverter.dsp.SpeakerFilterGenerator
 import com.deadrator.atmosconverter.ui.theme.Palette
+import com.deadrator.atmosconverter.ui.theme.Panel
+import com.deadrator.atmosconverter.ui.theme.Type
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -90,9 +95,10 @@ fun SpeakerShifterScreen(
         // SpeakerConfig even when the generated filter string is unchanged.
         @Suppress("UNUSED_EXPRESSION")
         revision
-        Text("🔊 Virtual Speaker Shifter", style = MaterialTheme.typography.headlineSmall)
+        Text("LISTENING ROOM", style = Type.Eyebrow)
+        Text("Virtual Speaker Shifter", style = Type.Title)
         Text(
-            "Drag speakers around the ring to rotate them; drag toward the center (NEAR) or the edge (FAR) - volume follows distance",
+            "Drag a speaker to move it: around the ring to rotate, in and out to set distance. Volume follows distance.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -131,8 +137,8 @@ fun SpeakerShifterScreen(
             }
         }
 
-        // Draggable ring
-        Card {
+        // The sound map — the app's signature instrument
+        Panel {
             SpeakerRingCanvas(
                 config = config,
                 onChanged = { refreshPreview() },
@@ -143,7 +149,7 @@ fun SpeakerShifterScreen(
         }
 
         // Angle sliders per speaker
-        Card {
+        Panel {
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -163,31 +169,40 @@ fun SpeakerShifterScreen(
                                 refreshPreview()
                             },
                             valueRange = -180f..180f,
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            colors = SliderDefaults.colors(
+                                thumbColor = Palette.Accent,
+                                activeTrackColor = Palette.Accent,
+                                inactiveTrackColor = Palette.Border
+                            )
                         )
                         Text(
                             "${angle.toInt()}°  ${(vol * 100).toInt()}%",
                             Modifier.width(84.dp),
-                            style = MaterialTheme.typography.bodySmall
+                            style = Type.Data
                         )
                     }
                 }
             }
         }
 
-        // Live filter preview
-        Card {
+        // Live filter preview — an instrument readout, set in mono
+        Panel {
             Column(
                 Modifier
                     .fillMaxWidth()
                     .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Text("Custom pan filter (used by the Converter)", style = MaterialTheme.typography.titleSmall)
+                Text("Custom pan filter", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    filterPreview ?: "",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    "Used by the Converter's Custom method.",
+                    style = Type.Data
+                )
+                Text(
+                    filterPreview ?: "—",
+                    style = Type.Data.copy(color = Palette.Text),
+                    color = Palette.Text
                 )
             }
         }
@@ -195,8 +210,9 @@ fun SpeakerShifterScreen(
 }
 
 /**
- * The speaker ring. Renders concentric rings, the "YOU" head, and speaker
- * dots that can be dragged; angle+distance update the SpeakerConfig.
+ * The speaker ring — rendered as a calibrated sound map: hairline rings,
+ * compass ticks at every 45°, an amber listener at center, and mono
+ * readouts. Dragging a dot updates the SpeakerConfig.
  */
 @Composable
 fun SpeakerRingCanvas(
@@ -205,6 +221,18 @@ fun SpeakerRingCanvas(
     modifier: Modifier = Modifier
 ) {
     var draggingLabel by remember { mutableStateOf<String?>(null) }
+
+    // One orchestrated moment: rings ring out once on entry. Skipped when the
+    // system animator scale is 0 (accessibility "remove animations").
+    val context = LocalContext.current
+    val animScale = remember {
+        Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+    }
+    val appear = remember { Animatable(if (animScale == 0f) 1f else 0f) }
+    LaunchedEffect(Unit) {
+        if (animScale != 0f) appear.animateTo(1f, tween(durationMillis = 520, easing = FastOutSlowInEasing))
+    }
+
     Canvas(
         modifier = modifier.pointerInput(config) {
             detectDragGestures(
@@ -242,23 +270,62 @@ fun SpeakerRingCanvas(
         val cx = size.width / 2f
         val cy = size.height / 2f
         val r = minOf(size.width, size.height) / 2f * 0.9f
+        val a = appear.value
+        // rings swell out from 0.94x and fade in; listeners/speakers follow
+        val ringScale = 0.94f + 0.06f * a
 
+        // Hairline rings
         for (frac in listOf(0.55f, 0.75f, 1.0f)) {
             drawCircle(
-                color = Palette.Border,
-                radius = r * frac,
+                color = Palette.Border.copy(alpha = a),
+                radius = r * frac * ringScale,
                 center = Offset(cx, cy),
-                style = Stroke(width = 1.5f)
+                style = Stroke(width = 1f)
             )
         }
-        drawCircle(color = Palette.Head, radius = r * 0.16f, center = Offset(cx, cy))
+
+        // Compass ticks at every 45°; cardinals longer, with labels
+        val cardinalPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.rgb(139, 149, 165)
+            textSize = 10f
+            typeface = android.graphics.Typeface.MONOSPACE
+            textAlign = android.graphics.Paint.Align.CENTER
+            alpha = (a * 255).toInt()
+        }
+        for (deg in 0 until 360 step 45) {
+            val rad = Math.toRadians((deg - 90).toDouble())
+            val outer = r * ringScale
+            val inner = if (deg % 90 == 0) outer - 12f else outer - 6f
+            drawLine(
+                color = Palette.Border.copy(alpha = 0.6f * a),
+                start = Offset(cx + (inner * cos(rad)).toFloat(), cy + (inner * sin(rad)).toFloat()),
+                end = Offset(cx + (outer * cos(rad)).toFloat(), cy + (outer * sin(rad)).toFloat()),
+                strokeWidth = 1.5f
+            )
+            if (deg % 90 == 0) {
+                val label = when (deg) { 0 -> "FRONT"; 90 -> "R"; 180 -> "REAR"; else -> "L" }
+                val lr = r * 0.80f
+                val lx = cx + (lr * cos(rad)).toFloat()
+                val ly = cy + (lr * sin(rad)).toFloat()
+                drawContext.canvas.nativeCanvas.drawText(label, lx, ly + 3.5f, cardinalPaint)
+            }
+        }
+        // The listener — amber phosphor at the center of the field
+        drawCircle(
+            color = Palette.Head.copy(alpha = a),
+            radius = r * 0.16f,
+            center = Offset(cx, cy)
+        )
         drawContext.canvas.nativeCanvas.drawText(
             "YOU",
             cx, cy + 6f,
             android.graphics.Paint().apply {
-                color = android.graphics.Color.rgb(15, 20, 32)
-                textSize = 14f
+                color = android.graphics.Color.rgb(24, 17, 3)
+                textSize = 13f
+                typeface = android.graphics.Typeface.MONOSPACE
+                isFakeBoldText = true
                 textAlign = android.graphics.Paint.Align.CENTER
+                alpha = (a * 255).toInt()
             }
         )
 
@@ -271,13 +338,13 @@ fun SpeakerRingCanvas(
             val y = cy + (rr * sin(rad)).toFloat()
 
             drawLine(
-                color = Palette.Border,
+                color = Palette.Border.copy(alpha = 0.7f * a),
                 start = Offset(cx, cy),
                 end = Offset(x, y),
-                strokeWidth = 1.5f,
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f))
+                strokeWidth = 1f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f))
             )
-            // Note: named `dotColor` (not `color`) so the Paint().apply { color = ... }
+            // Named `dotColor` (not `color`) so the Paint().apply { color = ... }
             // blocks below can't be confused with this outer val during name resolution.
             val dotColor = when {
                 label.startsWith("F") -> Palette.Front
@@ -285,27 +352,36 @@ fun SpeakerRingCanvas(
                 else -> Palette.Side
             }
             val dotR = (9 + vol * 7).toFloat()
-            drawCircle(color = dotColor, radius = dotR, center = Offset(x, y))
-            drawCircle(color = Color.White, radius = dotR, center = Offset(x, y), style = Stroke(width = 2f))
+            drawCircle(color = dotColor.copy(alpha = a), radius = dotR, center = Offset(x, y))
+            drawCircle(
+                color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.9f * a),
+                radius = dotR,
+                center = Offset(x, y),
+                style = Stroke(width = 1.5f)
+            )
 
             drawContext.canvas.nativeCanvas.drawText(
                 label,
                 x, y + 4f,
                 android.graphics.Paint().apply {
                     color = android.graphics.Color.WHITE
-                    textSize = 13f
+                    textSize = 12f
+                    typeface = android.graphics.Typeface.MONOSPACE
                     isFakeBoldText = true
                     textAlign = android.graphics.Paint.Align.CENTER
+                    alpha = (a * 255).toInt()
                 }
             )
             val zone = when { dist < 0.33 -> "near"; dist > 0.66 -> "far"; else -> "mid" }
             drawContext.canvas.nativeCanvas.drawText(
                 "${(vol * 100).toInt()}%  $zone",
-                x, y + dotR + 16f,
+                x, y + dotR + 15f,
                 android.graphics.Paint().apply {
-                    color = android.graphics.Color.rgb(147, 160, 184)
-                    textSize = 11f
+                    color = android.graphics.Color.rgb(139, 149, 165)
+                    textSize = 10f
+                    typeface = android.graphics.Typeface.MONOSPACE
                     textAlign = android.graphics.Paint.Align.CENTER
+                    alpha = (a * 255).toInt()
                 }
             )
         }

@@ -29,6 +29,9 @@ import com.deadrator.atmosconverter.dsp.CodecRegistry
 import com.deadrator.atmosconverter.dsp.FilterPresets
 import com.deadrator.atmosconverter.dsp.SpeakerConfig
 import com.deadrator.atmosconverter.engine.FfmpegEngine
+import com.deadrator.atmosconverter.ui.theme.Palette
+import com.deadrator.atmosconverter.ui.theme.Panel
+import com.deadrator.atmosconverter.ui.theme.Type
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -156,18 +159,19 @@ fun ConverterScreen(speakerConfig: SpeakerConfig) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("🎧 Dolby 5.1 to Binaural Converter", style = MaterialTheme.typography.headlineSmall)
+        Text("CONVERSION", style = Type.Eyebrow)
+        Text("Surround to Binaural", style = Type.Title)
         Text(
-            "Convert surround sound to stereo for TWS earbuds & headphones",
-            style = MaterialTheme.typography.bodyMedium,
+            "Convert surround sound to stereo for TWS earbuds and headphones.",
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
-        Card {
+        Panel {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { picker.launch(arrayOf("audio/*", "video/*", "*/*")) },
                        enabled = !converting) {
-                    Text("📂 Select Audio File")
+                    Text("Select Audio File")
                 }
                 inputName?.let {
                     Text(it, style = MaterialTheme.typography.bodyMedium)
@@ -180,7 +184,7 @@ fun ConverterScreen(speakerConfig: SpeakerConfig) {
         }
 
         // Method
-        Card {
+        Panel {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Method", style = MaterialTheme.typography.titleSmall)
                 val methods = listOf(
@@ -206,7 +210,7 @@ fun ConverterScreen(speakerConfig: SpeakerConfig) {
                 if (method == FilterPresets.Method.HRTF) {
                     OutlinedButton(onClick = { sofaPicker.launch(arrayOf("application/octet-stream", "*/*")) },
                                    enabled = !converting) {
-                        Text(if (sofaPath != null) "✓ SOFA selected" else "Select SOFA file")
+                        Text(if (sofaPath != null) "SOFA selected ✓" else "Select SOFA file")
                     }
                 }
                 if (method == FilterPresets.Method.CUSTOM) {
@@ -220,7 +224,7 @@ fun ConverterScreen(speakerConfig: SpeakerConfig) {
         }
 
         // Preset
-        Card {
+        Panel {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Preset", style = MaterialTheme.typography.titleSmall)
                 val presetNames = CodecRegistry.PRESETS.keys.toList()
@@ -238,7 +242,7 @@ fun ConverterScreen(speakerConfig: SpeakerConfig) {
         }
 
         // Codec / container
-        Card {
+        Panel {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Codec & Container", style = MaterialTheme.typography.titleSmall)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -266,7 +270,7 @@ fun ConverterScreen(speakerConfig: SpeakerConfig) {
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { convert() }, enabled = !converting && inputUri != null) {
-                Text("🔄 Convert")
+                Text("Convert")
             }
             if (outputFile != null) {
                 OutlinedButton(onClick = { share() }) {
