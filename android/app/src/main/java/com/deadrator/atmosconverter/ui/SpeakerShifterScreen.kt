@@ -1,5 +1,6 @@
 package com.deadrator.atmosconverter.ui
 
+import android.os.SystemClock
 import android.provider.Settings
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -8,12 +9,13 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -27,7 +29,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.deadrator.atmosconverter.dsp.SpeakerConfig
 import com.deadrator.atmosconverter.dsp.SpeakerFilterGenerator
 import com.deadrator.atmosconverter.ui.theme.Palette
@@ -87,7 +91,6 @@ fun SpeakerShifterScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -137,73 +140,90 @@ fun SpeakerShifterScreen(
             }
         }
 
-        // The sound map — the app's signature instrument
-        Panel {
+        // The sound map — the app's signature instrument. Lives OUTSIDE the
+        // scrollable controls below: a scrollable ancestor consumes vertical
+        // drags in the pointer Main pass before the canvas's detectDragGestures
+        // sees them, which made the dots undraggable. Its own weighted region
+        // also keeps it from ballooning to full screen width on a phone.
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            contentAlignment = Alignment.Center
+        ) {
+            val ringSize = minOf(maxWidth, maxHeight)
             SpeakerRingCanvas(
                 config = config,
                 onChanged = { refreshPreview() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
+                modifier = Modifier.size(ringSize)
             )
         }
 
-        // Angle sliders per speaker
-        Panel {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text("Angles", style = MaterialTheme.typography.titleSmall)
-                config.labels.filter { it != "LFE" }.forEach { label ->
-                    val angle = config.getPosition(label)
-                    val vol = config.getVolume(label)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("$label", Modifier.width(34.dp))
-                        Slider(
-                            value = angle.toFloat(),
-                            onValueChange = {
-                                config.setPosition(label, it.toDouble())
-                                refreshPreview()
-                            },
-                            valueRange = -180f..180f,
-                            modifier = Modifier.weight(1f),
-                            colors = SliderDefaults.colors(
-                                thumbColor = Palette.Accent,
-                                activeTrackColor = Palette.Accent,
-                                inactiveTrackColor = Palette.Border
+        // Scrollable control panels below the ring
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(0.9f)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Angle sliders per speaker
+            Panel {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text("Angles", style = MaterialTheme.typography.titleSmall)
+                    config.labels.filter { it != "LFE" }.forEach { label ->
+                        val angle = config.getPosition(label)
+                        val vol = config.getVolume(label)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("$label", Modifier.width(34.dp))
+                            Slider(
+                                value = angle.toFloat(),
+                                onValueChange = {
+                                    config.setPosition(label, it.toDouble())
+                                    refreshPreview()
+                                },
+                                valueRange = -180f..180f,
+                                modifier = Modifier.weight(1f),
+                                colors = SliderDefaults.colors(
+                                    thumbColor = Palette.Accent,
+                                    activeTrackColor = Palette.Accent,
+                                    inactiveTrackColor = Palette.Border
+                                )
                             )
-                        )
-                        Text(
-                            "${angle.toInt()}°  ${(vol * 100).toInt()}%",
-                            Modifier.width(84.dp),
-                            style = Type.Data
-                        )
+                            Text(
+                                "${angle.toInt()}°  ${(vol * 100).toInt()}%",
+                                Modifier.width(84.dp),
+                                style = Type.Data
+                            )
+                        }
                     }
                 }
             }
-        }
 
-        // Live filter preview — an instrument readout, set in mono
-        Panel {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text("Custom pan filter", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    "Used by the Converter's Custom method.",
-                    style = Type.Data
-                )
-                Text(
-                    filterPreview ?: "—",
-                    style = Type.Data,
-                    color = Palette.Text
-                )
+            // Live filter preview — an instrument readout, set in mono
+            Panel {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text("Custom pan filter", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "Used by the Converter's Custom method.",
+                        style = Type.Data
+                    )
+                    Text(
+                        filterPreview ?: "—",
+                        style = Type.Data,
+                        color = Palette.Text
+                    )
+                }
             }
         }
     }
@@ -213,6 +233,12 @@ fun SpeakerShifterScreen(
  * The speaker ring — rendered as a calibrated sound map: hairline rings,
  * compass ticks at every 45°, an amber listener at center, and mono
  * readouts. Dragging a dot updates the SpeakerConfig.
+ *
+ * Performance: drag ticks only bump a local `dragTick` state read inside the
+ * draw lambda, so a drag invalidates THIS canvas (a redraw, not a
+ * recomposition) at display refresh rate. The parent screen (sliders, filter
+ * preview) is synced via `onChanged()` once per gesture (plus a 150ms
+ * throttle during the drag) — no full-screen recomposition per frame.
  */
 @Composable
 fun SpeakerRingCanvas(
@@ -221,6 +247,48 @@ fun SpeakerRingCanvas(
     modifier: Modifier = Modifier
 ) {
     var draggingLabel by remember { mutableStateOf<String?>(null) }
+    // Redraw-only tick: read inside the draw lambda so config mutations during
+    // a drag re-render just this canvas (no recomposition, no Paint churn).
+    var dragTick by remember { mutableIntStateOf(0) }
+    var lastSyncMs by remember { mutableLongStateOf(0L) }
+    val density = LocalDensity.current
+
+    // Pre-created native paints — never allocate inside the draw loop. Sizes
+    // are sp, so labels scale with density AND the system font scale.
+    val cardinalPaint = remember(density) {
+        android.graphics.Paint().apply {
+            color = android.graphics.Color.rgb(139, 149, 165)
+            textSize = with(density) { 11.sp.toPx() }
+            typeface = android.graphics.Typeface.MONOSPACE
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+    }
+    val youPaint = remember(density) {
+        android.graphics.Paint().apply {
+            color = android.graphics.Color.rgb(24, 17, 3)
+            textSize = with(density) { 14.sp.toPx() }
+            typeface = android.graphics.Typeface.MONOSPACE
+            isFakeBoldText = true
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+    }
+    val labelPaint = remember(density) {
+        android.graphics.Paint().apply {
+            color = android.graphics.Color.WHITE
+            textSize = with(density) { 13.sp.toPx() }
+            typeface = android.graphics.Typeface.MONOSPACE
+            isFakeBoldText = true
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+    }
+    val zonePaint = remember(density) {
+        android.graphics.Paint().apply {
+            color = android.graphics.Color.rgb(139, 149, 165)
+            textSize = with(density) { 10.sp.toPx() }
+            typeface = android.graphics.Typeface.MONOSPACE
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+    }
 
     // One orchestrated moment: rings ring out once on entry. Skipped when the
     // system animator scale is 0 (accessibility "remove animations").
@@ -240,16 +308,19 @@ fun SpeakerRingCanvas(
                     val cx = size.width / 2f
                     val cy = size.height / 2f
                     val r = minOf(size.width, size.height) / 2f * 0.9f
+                    val hitR = 44.dp.toPx() // density-scaled, generous grab area
                     var best: String? = null
                     var bestDist = Float.MAX_VALUE
-                    for ((label, angle) in config.positionsForFilter()) {
-                        val rad = Math.toRadians(angle - 90.0)
+                    for (label in config.labels) {
+                        if (label == "LFE") continue
+                        val angle = config.getPosition(label)
                         val dist = config.getDistance(label)
                         val rr = radiusFor(dist, r)
+                        val rad = Math.toRadians(angle - 90.0)
                         val x = cx + (rr * cos(rad)).toFloat()
                         val y = cy + (rr * sin(rad)).toFloat()
                         val d = hypot((offset.x - x).toDouble(), (offset.y - y).toDouble())
-                        if (d < 34 && d < bestDist) { best = label; bestDist = d.toFloat() }
+                        if (d < hitR && d < bestDist) { best = label; bestDist = d.toFloat() }
                     }
                     draggingLabel = best
                 },
@@ -260,19 +331,37 @@ fun SpeakerRingCanvas(
                         size.width / 2f, size.height / 2f
                     )
                     config.setPosition(target, angle, dist)
+                    dragTick++ // redraw only this canvas
+                    // Throttle full-screen sync so sliders feel live but the
+                    // ring keeps 60/90fps (onChanged recomposes the screen).
+                    val now = SystemClock.uptimeMillis()
+                    if (now - lastSyncMs > 150L) {
+                        lastSyncMs = now
+                        onChanged()
+                    }
+                },
+                onDragEnd = {
+                    draggingLabel = null
                     onChanged()
                 },
-                onDragEnd = { draggingLabel = null },
-                onDragCancel = { draggingLabel = null }
+                onDragCancel = {
+                    draggingLabel = null
+                    onChanged()
+                }
             )
         }
     ) {
+        // Subscribes this draw to drag ticks (redraw without recomposition).
+        @Suppress("UNUSED_EXPRESSION")
+        dragTick
+
         val cx = size.width / 2f
         val cy = size.height / 2f
         val r = minOf(size.width, size.height) / 2f * 0.9f
         val a = appear.value
         // rings swell out from 0.94x and fade in; listeners/speakers follow
         val ringScale = 0.94f + 0.06f * a
+        val alpha = (a * 255).toInt()
 
         // Hairline rings
         for (frac in listOf(0.55f, 0.75f, 1.0f)) {
@@ -285,17 +374,11 @@ fun SpeakerRingCanvas(
         }
 
         // Compass ticks at every 45°; cardinals longer, with labels
-        val cardinalPaint = android.graphics.Paint().apply {
-            color = android.graphics.Color.rgb(139, 149, 165)
-            textSize = 10f
-            typeface = android.graphics.Typeface.MONOSPACE
-            textAlign = android.graphics.Paint.Align.CENTER
-            alpha = (a * 255).toInt()
-        }
+        cardinalPaint.alpha = alpha
         for (deg in 0 until 360 step 45) {
             val rad = Math.toRadians((deg - 90).toDouble())
             val outer = r * ringScale
-            val inner = if (deg % 90 == 0) outer - 12f else outer - 6f
+            val inner = if (deg % 90 == 0) outer - 12.dp.toPx() else outer - 6.dp.toPx()
             drawLine(
                 color = Palette.Border.copy(alpha = 0.6f * a),
                 start = Offset(cx + (inner * cos(rad)).toFloat(), cy + (inner * sin(rad)).toFloat()),
@@ -307,7 +390,7 @@ fun SpeakerRingCanvas(
                 val lr = r * 0.80f
                 val lx = cx + (lr * cos(rad)).toFloat()
                 val ly = cy + (lr * sin(rad)).toFloat()
-                drawContext.canvas.nativeCanvas.drawText(label, lx, ly + 3.5f, cardinalPaint)
+                drawContext.canvas.nativeCanvas.drawText(label, lx, ly + 4.dp.toPx(), cardinalPaint)
             }
         }
         // The listener — amber phosphor at the center of the field
@@ -316,24 +399,20 @@ fun SpeakerRingCanvas(
             radius = r * 0.16f,
             center = Offset(cx, cy)
         )
+        youPaint.alpha = alpha
         drawContext.canvas.nativeCanvas.drawText(
             "YOU",
-            cx, cy + 6f,
-            android.graphics.Paint().apply {
-                color = android.graphics.Color.rgb(24, 17, 3)
-                textSize = 13f
-                typeface = android.graphics.Typeface.MONOSPACE
-                isFakeBoldText = true
-                textAlign = android.graphics.Paint.Align.CENTER
-                alpha = (a * 255).toInt()
-            }
+            cx, cy + 6.dp.toPx(),
+            youPaint
         )
 
-        for ((label, angle) in config.positionsForFilter()) {
-            val rad = Math.toRadians(angle - 90.0)
+        for (label in config.labels) {
+            if (label == "LFE") continue
+            val angle = config.getPosition(label)
             val dist = config.getDistance(label)
             val vol = config.getVolume(label)
             val rr = radiusFor(dist, r)
+            val rad = Math.toRadians(angle - 90.0)
             val x = cx + (rr * cos(rad)).toFloat()
             val y = cy + (rr * sin(rad)).toFloat()
 
@@ -351,7 +430,7 @@ fun SpeakerRingCanvas(
                 label.startsWith("B") -> Palette.Rear
                 else -> Palette.Side
             }
-            val dotR = (9 + vol * 7).toFloat()
+            val dotR = (10 + vol * 6).dp.toPx() // density-scaled, bigger grab target
             drawCircle(color = dotColor.copy(alpha = a), radius = dotR, center = Offset(x, y))
             drawCircle(
                 color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.9f * a),
@@ -360,29 +439,14 @@ fun SpeakerRingCanvas(
                 style = Stroke(width = 1.5f)
             )
 
-            drawContext.canvas.nativeCanvas.drawText(
-                label,
-                x, y + 4f,
-                android.graphics.Paint().apply {
-                    color = android.graphics.Color.WHITE
-                    textSize = 12f
-                    typeface = android.graphics.Typeface.MONOSPACE
-                    isFakeBoldText = true
-                    textAlign = android.graphics.Paint.Align.CENTER
-                    alpha = (a * 255).toInt()
-                }
-            )
+            labelPaint.alpha = alpha
+            drawContext.canvas.nativeCanvas.drawText(label, x, y + 4.dp.toPx(), labelPaint)
             val zone = when { dist < 0.33 -> "near"; dist > 0.66 -> "far"; else -> "mid" }
+            zonePaint.alpha = alpha
             drawContext.canvas.nativeCanvas.drawText(
                 "${(vol * 100).toInt()}%  $zone",
-                x, y + dotR + 15f,
-                android.graphics.Paint().apply {
-                    color = android.graphics.Color.rgb(139, 149, 165)
-                    textSize = 10f
-                    typeface = android.graphics.Typeface.MONOSPACE
-                    textAlign = android.graphics.Paint.Align.CENTER
-                    alpha = (a * 255).toInt()
-                }
+                x, y + dotR + 15.dp.toPx(),
+                zonePaint
             )
         }
     }
