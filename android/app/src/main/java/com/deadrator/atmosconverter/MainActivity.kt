@@ -6,7 +6,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Equalizer
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.SpeakerGroup
@@ -30,7 +29,6 @@ import com.deadrator.atmosconverter.dsp.SpeakerConfig
 import com.deadrator.atmosconverter.ui.ConverterScreen
 import com.deadrator.atmosconverter.ui.PlayerScreen
 import com.deadrator.atmosconverter.ui.SpeakerShifterScreen
-import com.deadrator.atmosconverter.ui.VisualizerScreen
 import com.deadrator.atmosconverter.ui.theme.AtmosTheme
 import com.deadrator.atmosconverter.ui.theme.Palette
 
@@ -49,8 +47,7 @@ class MainActivity : ComponentActivity() {
 enum class Tab(val route: String, val label: String, val icon: ImageVector) {
     Converter("converter", "Converter", Icons.Filled.GraphicEq),
     Shifter("shifter", "Speaker Shifter", Icons.Filled.SpeakerGroup),
-    Player("player", "Player", Icons.Filled.MusicNote),
-    Visualizer("visualizer", "Visualizer", Icons.Filled.Equalizer)
+    Player("player", "AC3 Player", Icons.Filled.MusicNote)
 }
 
 @Composable
@@ -102,7 +99,6 @@ fun AtmosApp() {
                 )
             }
             composable(Tab.Player.route) { PlayerScreen() }
-            composable(Tab.Visualizer.route) { VisualizerScreen() }
         }
     }
 }

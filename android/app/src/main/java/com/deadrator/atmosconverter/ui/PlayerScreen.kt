@@ -115,7 +115,7 @@ fun PlayerScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("🎵 Surround Player", style = MaterialTheme.typography.headlineSmall)
+        Text("🎵 AC3 Music Player", style = MaterialTheme.typography.headlineSmall)
 
         // Playlist
         Card(modifier = Modifier.height(160.dp)) {

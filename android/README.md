@@ -11,6 +11,8 @@ were pulled; this port uses the community-maintained replacement.
 
 ## Features
 
+A deliberately simple 3-tab app:
+
 - **🎧 Converter** — pick any surround file (M4A/MP4/MKV/AC3/E-AC-3/AC-4/
   TrueHD/DTS/FLAC/WAV/OGG), choose method / preset / codec / container / bitrate,
   convert to binaural stereo, share the result.
@@ -18,11 +20,10 @@ were pulled; this port uses the community-maintained replacement.
   Custom Speaker Layout, Surround Upmix 5.1/7.1, Downmix 7.1→5.1, Passthrough.
 - **🔊 Speaker Shifter** — drag speakers on a ring (rotates them; drag in/out
   for NEAR/FAR distance-based volume), angle sliders, presets, and a live
-  preview of the generated pan filter.
-- **🎵 Player** — playlist, play/pause/seek, per-channel VU meters, waveform,
-  and optional "Preview conversion" (plays through the FFmpeg chain).
-- **📊 Visualizer** — per-channel levels + waveform for any file, plus live
-  mic capture.
+  preview of the generated pan filter (feeds the Converter's Custom method).
+- **🎵 AC3 Music Player** — playlist, play/pause/seek, per-channel VU meters,
+  and waveform. Plays AC3/E-AC-3/DTS/TrueHD by transcoding through FFmpeg
+  when the platform MediaPlayer can't decode them.
 
 ## Requirements
 
@@ -64,3 +65,7 @@ Install it with `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
   wiring it to the active Converter method + speaker layout is a natural next
   step.
 - **Full parity**: share/save uses the app's external Music dir + FileProvider.
+- **Scope**: the Android app intentionally has just the 3 tabs above (the
+  desktop app has more, e.g. a channel Visualizer). A system-wide "make every
+  app sound Atmos" service is NOT feasible on Android without root — there is
+  no public API to reprocess other apps' audio output.
