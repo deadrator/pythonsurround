@@ -57,12 +57,21 @@ jobs:
       # ---------------- Publish beta preview to GitHub Releases ----------------
       - name: Resolve release version and arch
         id: release
+        env:
+          # User-supplied workflow_dispatch inputs are passed via env, never
+          # interpolated into the script, to prevent shell injection.
+          INPUT_ARCH: ${{ inputs.arch }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          ARCH="${{ inputs.arch || 'x64' }}"
-          VERSION="${{ inputs.version }}"
+          ARCH="${INPUT_ARCH:-x64}"
+          VERSION="$INPUT_VERSION"
           if [ -z "$VERSION" ]; then
             VERSION="$(grep -oP 'versionName\s*=\s*"\K[^"]+' android/app/build.gradle.kts | head -1)"
           fi
+          VERSION="${VERSION:-1.0.0}"
+          # Sanitize to a safe tag/output charset so a crafted input cannot
+          # inject extra keys into GITHUB_OUTPUT or create a malformed tag.
+          VERSION="$(printf '%s' "$VERSION" | tr -cd 'A-Za-z0-9._-')"
           VERSION="${VERSION:-1.0.0}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "arch=${ARCH}" >> "$GITHUB_OUTPUT"
@@ -71,20 +80,21 @@ jobs:
       - name: Publish beta preview release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_ARCH: ${{ steps.release.outputs.arch }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
-          VERSION="${{ steps.release.outputs.version }}"
-          ARCH="${{ steps.release.outputs.arch }}"
+          VERSION="$RELEASE_VERSION"
+          ARCH="$RELEASE_ARCH"
           TAG="beta_preview_v${VERSION}_${ARCH}"
           ASSET="AtmosBinauralConverter-${TAG}.apk"
           cp android/app/build/outputs/apk/debug/app-debug.apk "$ASSET"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "⚠️ Release ${TAG} already exists - skipping (bump the version or delete the release to republish)."
           else
+            NOTES="$(printf '🎧 Atmos Binaural Converter - Android beta preview (%s)\n- Commit: %s\n- APK: %s' "$ARCH" "$GITHUB_SHA" "$ASSET")"
             gh release create "$TAG" "$ASSET" \
               --title "$TAG" \
               --prerelease \
-              --notes "🎧 Atmos Binaural Converter - Android beta preview ($ARCH)
-              - Commit: ${{ github.sha }}
-              - APK: $ASSET"
+              --notes "$NOTES"
             echo "✅ Published release: ${TAG}"
           fi
