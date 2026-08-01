@@ -22,3 +22,26 @@ sounddevice>=0.4.0
 
 # Building (optional)
 # pyinstaller>=5.0.0
+
+error 
+java.lang.NoClassDefFoundError: Failed resolution of: Lcom/arthenica/smartexception/java/Exceptions;
+	at com.arthenica.ffmpegkit.FFmpegKitConfig.<clinit>(FFmpegKitConfig.java:134)
+	at com.arthenica.ffmpegkit.AbstractSession.<init>(AbstractSession.java:135)
+	at com.arthenica.ffmpegkit.MediaInformationSession.<init>(MediaInformationSession.java:79)
+	at com.arthenica.ffmpegkit.MediaInformationSession.create(MediaInformationSession.java:56)
+	at com.arthenica.ffmpegkit.FFprobeKit.getMediaInformationAsync(FFprobeKit.java:311)
+	at com.deadrator.atmosconverter.engine.AudioProbe$probe$2.invokeSuspend(AudioProbe.kt:45)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:33)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:101)
+	at kotlinx.coroutines.internal.LimitedDispatcher$Worker.run(LimitedDispatcher.kt:113)
+	at kotlinx.coroutines.scheduling.TaskImpl.run(Tasks.kt:89)
+	at kotlinx.coroutines.scheduling.CoroutineScheduler.runSafely(CoroutineScheduler.kt:589)
+	at kotlinx.coroutines.scheduling.CoroutineScheduler$Worker.executeTask(CoroutineScheduler.kt:823)
+	at kotlinx.coroutines.scheduling.CoroutineScheduler$Worker.runWorker(CoroutineScheduler.kt:720)
+	at kotlinx.coroutines.scheduling.CoroutineScheduler$Worker.run(CoroutineScheduler.kt:707)
+	Suppressed: kotlinx.coroutines.internal.DiagnosticCoroutineContextException: [androidx.compose.ui.platform.MotionDurationScaleImpl@d32242, androidx.compose.runtime.BroadcastFrameClock@f61e253, StandaloneCoroutine{Cancelling}@ed4d790, AndroidUiDispatcher@3add889]
+Caused by: java.lang.ClassNotFoundException: Didn't find class "com.arthenica.smartexception.java.Exceptions" on path: DexPathList[[zip file "/data/app/~~PXiRSB82k5leH6Fr0DZ9pw==/com.deadrator.atmosconverter-xe62ENp4_eckIY1nHh14dQ==/base.apk"],nativeLibraryDirectories=[/data/app/~~PXiRSB82k5leH6Fr0DZ9pw==/com.deadrator.atmosconverter-xe62ENp4_eckIY1nHh14dQ==/lib/arm64, /data/app/~~PXiRSB82k5leH6Fr0DZ9pw==/com.deadrator.atmosconverter-xe62ENp4_eckIY1nHh14dQ==/base.apk!/lib/arm64-v8a, /system/lib64, /system_ext/lib64]]
+	at dalvik.system.BaseDexClassLoader.findClass(BaseDexClassLoader.java:259)
+	at java.lang.ClassLoader.loadClass(ClassLoader.java:644)
+	at java.lang.ClassLoader.loadClass(ClassLoader.java:580)
+	... 14 more
