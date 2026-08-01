@@ -201,7 +201,7 @@ fun SpeakerShifterScreen(
                 )
                 Text(
                     filterPreview ?: "—",
-                    style = Type.Data.copy(color = Palette.Text),
+                    style = Type.Data,
                     color = Palette.Text
                 )
             }
