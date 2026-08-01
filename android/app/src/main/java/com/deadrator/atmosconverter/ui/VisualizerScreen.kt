@@ -72,7 +72,7 @@ fun VisualizerScreen() {
                     labels = standardLabels(ch)
                     // Decode the first 60s to mono/float for levels + waveform
                     // buckets. -t caps the decode: a full album-length 5.1 decode
-                    // (~1.15 MB/s per channel of f32le) would OOM readBytes()
+                    // (~1.15 MB/s of f32le, 6ch at 48 kHz) would OOM readBytes()
                     // and crash - which is what happened with AC3 files here.
                     withContext(Dispatchers.IO) {
                         val out = File(context.cacheDir, "viz_${System.currentTimeMillis()}.f32le")
