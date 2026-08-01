@@ -50,8 +50,16 @@ class FfmpegEngine(private val context: Context) {
     ): Boolean = withContext(Dispatchers.IO) {
         suspendCancellableCoroutine { cont ->
             var session: Session? = null
+            // FFmpegKit parses the command STRING and splits it on whitespace, so
+            // any argument containing spaces (filter chains like
+            // "anequalizer=c0 f=80 w=200 g=4 t=1", filenames with spaces) must be
+            // single-quoted to survive as one token. Args that already embed
+            // quotes (the HRTF sofalizer path) are left untouched.
+            val command = args.joinToString(" ") { arg ->
+                if (arg.any { it.isWhitespace() } && !arg.contains("'")) "'$arg'" else arg
+            }
             FFmpegKit.executeAsync(
-                args.joinToString(" "),
+                command,
                 { s ->
                     session = s
                     val ok = ReturnCode.isSuccess(s.returnCode)
